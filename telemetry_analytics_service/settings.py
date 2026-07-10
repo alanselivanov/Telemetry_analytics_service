@@ -11,21 +11,41 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / ".env")
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-=t8d9pw0xt^%2me3imk7#hd_41ukcsmatzkx4*_drg%jy#k=bo"
+SECRET_KEY = os.getenv(
+    "SECRET_KEY",
+    "django-insecure-=t8d9pw0xt^%2me3imk7#hd_41ukcsmatzkx4*_drg%jy#k=bo",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = _env_bool("DEBUG", True)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv("ALLOWED_HOSTS", "").split(",")
+    if host.strip()
+]
 
 
 # Application definition
@@ -37,6 +57,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "omnicomm.apps.OmnicommConfig",
+    "cli.apps.CliConfig",
 ]
 
 MIDDLEWARE = [
@@ -74,8 +96,8 @@ WSGI_APPLICATION = "telemetry_analytics_service.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": os.getenv("DATABASE_ENGINE", "django.db.backends.sqlite3"),
+        "NAME": BASE_DIR / os.getenv("DATABASE_NAME", "db.sqlite3"),
     }
 }
 
@@ -102,9 +124,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "ru-ru")
 
-TIME_ZONE = "UTC"
+TIME_ZONE = os.getenv("TIME_ZONE", "Asia/Yekaterinburg")
 
 USE_I18N = True
 
@@ -120,3 +142,19 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ImproperlyConfigured(
+            f"Environment variable {name} is required. Set it in .env."
+        )
+    return value
+
+
+# Omnicomm Online API — значения задаются только в .env
+OMNICOMM_BASE_URL = _required_env("OMNICOMM_BASE_URL")
+OMNICOMM_LOGIN_URL = _required_env("OMNICOMM_LOGIN_URL")
+OMNICOMM_VEHICLE_TREE_PATH = _required_env("OMNICOMM_VEHICLE_TREE_PATH")
+OMNICOMM_REQUEST_TIMEOUT = int(_required_env("OMNICOMM_REQUEST_TIMEOUT"))

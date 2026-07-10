@@ -2,9 +2,18 @@
 """Django's command-line utility for administrative tasks."""
 import os
 import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 def main():
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+
+    apps_dir = BASE_DIR / "apps"
+    sys.path.insert(0, str(apps_dir))
     """Run administrative tasks."""
     os.environ.setdefault(
         "DJANGO_SETTINGS_MODULE", "telemetry_analytics_service.settings"

@@ -175,8 +175,9 @@ def _required_env(name: str) -> str:
     return value
 
 
-# Omnicomm Online API — значения задаются только в .env
+# Omnicomm Online API — все URL задаются только в .env
 OMNICOMM_BASE_URL = _required_env("OMNICOMM_BASE_URL")
 OMNICOMM_LOGIN_URL = _required_env("OMNICOMM_LOGIN_URL")
 OMNICOMM_VEHICLE_TREE_PATH = _required_env("OMNICOMM_VEHICLE_TREE_PATH")
+OMNICOMM_CLICK_LOG_PATH = _required_env("OMNICOMM_CLICK_LOG_PATH")
 OMNICOMM_REQUEST_TIMEOUT = int(_required_env("OMNICOMM_REQUEST_TIMEOUT"))

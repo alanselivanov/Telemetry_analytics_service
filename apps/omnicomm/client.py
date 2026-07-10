@@ -47,10 +47,16 @@ def _load_omnicomm_config() -> dict[str, Any]:
     from django.conf import settings
 
     base_url = settings.OMNICOMM_BASE_URL.rstrip("/")
+    click_log_path = settings.OMNICOMM_CLICK_LOG_PATH
+    if not click_log_path.startswith("/"):
+        click_log_path = f"/{click_log_path}"
+    vehicle_tree_path = settings.OMNICOMM_VEHICLE_TREE_PATH
+    if not vehicle_tree_path.startswith("/"):
+        vehicle_tree_path = f"/{vehicle_tree_path}"
     return {
         "login_endpoint": settings.OMNICOMM_LOGIN_URL,
-        "vehicle_tree_endpoint": f"{base_url}{settings.OMNICOMM_VEHICLE_TREE_PATH}",
-        "click_log_endpoint": f"{base_url}/v1/click/log",
+        "vehicle_tree_endpoint": f"{base_url}{vehicle_tree_path}",
+        "click_log_endpoint": f"{base_url}{click_log_path}",
         "timeout": settings.OMNICOMM_REQUEST_TIMEOUT,
     }
 

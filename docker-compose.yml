@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: telemetry_analytics_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "12345789"
+      POSTGRES_DB: telemetry_analytics_service
+    ports:
+      - "5433:5432"
+    volumes:
+      - telemetry_pg_data:/var/lib/postgresql/data
+
+volumes:
+  telemetry_pg_data:

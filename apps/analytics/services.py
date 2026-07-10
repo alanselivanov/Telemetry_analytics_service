@@ -12,6 +12,11 @@ from omnicomm.client import OmnicommClient, extract_click_log_rows
 from reports.models import AnalysisRun
 from reports.services import save_fuel_analysis_result
 
+from .concurrency import (
+    analyze_fuel_telemetry_parallel,
+    resolve_cpu_workers,
+    resolve_io_workers,
+)
 from .engine import AnalysisConfig, FuelAnalysisResult, analyze_fuel_telemetry
 from .mock_data import (
     MOCK_CALIBRATION,
@@ -22,6 +27,8 @@ from .mock_data import (
 )
 
 ProgressCallback = Callable[..., None]
+FetchProgressCallback = Callable[..., None]
+AnalyzeProgressCallback = Callable[..., None]
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,16 @@ class FuelAnalysisExecution:
     balance: FuelBalance
     raw_rows_count: int
     chunks_count: int
+    io_workers: int = 1
+    cpu_workers: int = 1
+
+
+@dataclass(frozen=True)
+class VehicleAnalysisTarget:
+    """Vehicle and calibration pair prepared for analysis."""
+
+    vehicle: Vehicle
+    calibration_table: CalibrationTable
 
 
 def run_real_fuel_analysis(
@@ -55,24 +72,173 @@ def run_real_fuel_analysis(
     chunks: list[tuple[int, int]],
     source: str = "run_telemetry",
     config: AnalysisConfig | None = None,
-    progress_callback: ProgressCallback | None = None,
-    max_workers: int = 4,
+    fetch_progress_callback: FetchProgressCallback | None = None,
+    analyze_progress_callback: AnalyzeProgressCallback | None = None,
+    io_workers: int | None = None,
+    cpu_workers: int | None = None,
 ) -> FuelAnalysisExecution:
-    """
-    Download click/log chunks in parallel, run analytics, and persist results.
+    """Download click/log chunks in parallel, analyze in hybrid mode, and persist."""
+    execution = _execute_vehicle_analysis(
+        client=client,
+        target=VehicleAnalysisTarget(
+            vehicle=vehicle,
+            calibration_table=calibration_table,
+        ),
+        chunks=chunks,
+        source=source,
+        config=config,
+        fetch_progress_callback=fetch_progress_callback,
+        analyze_progress_callback=analyze_progress_callback,
+        io_workers=io_workers,
+        cpu_workers=cpu_workers,
+    )
+    return execution
 
-    The Omnicomm client owns authorization; this service only orchestrates the
-    existing client/calibration/analytics/report layers.
-    """
+
+def run_multi_vehicle_fuel_analysis(
+    *,
+    client: OmnicommClient,
+    targets: list[VehicleAnalysisTarget],
+    chunks: list[tuple[int, int]],
+    source: str = "run_telemetry",
+    config: AnalysisConfig | None = None,
+    vehicle_progress_callback: Callable[[int, int, str], None] | None = None,
+    fetch_progress_callback: FetchProgressCallback | None = None,
+    analyze_progress_callback: AnalyzeProgressCallback | None = None,
+    io_workers: int | None = None,
+    cpu_workers: int | None = None,
+) -> list[FuelAnalysisExecution]:
+    """Analyze several vehicles concurrently without blocking on each one sequentially."""
+    if not targets:
+        return []
+
+    if len(targets) == 1:
+        return [
+            run_real_fuel_analysis(
+                client=client,
+                vehicle=targets[0].vehicle,
+                calibration_table=targets[0].calibration_table,
+                chunks=chunks,
+                source=source,
+                config=config,
+                fetch_progress_callback=fetch_progress_callback,
+                analyze_progress_callback=analyze_progress_callback,
+                io_workers=io_workers,
+                cpu_workers=cpu_workers,
+            )
+        ]
+
+    workers = resolve_io_workers(io_workers, len(targets))
+    executions: list[FuelAnalysisExecution | None] = [None] * len(targets)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(
+                _execute_vehicle_analysis,
+                client=client,
+                target=target,
+                chunks=chunks,
+                source=source,
+                config=config,
+                fetch_progress_callback=_wrap_fetch_progress_callback(
+                    target.vehicle.name,
+                    fetch_progress_callback,
+                ),
+                analyze_progress_callback=_wrap_analyze_progress_callback(
+                    target.vehicle.name,
+                    analyze_progress_callback,
+                ),
+                io_workers=io_workers,
+                cpu_workers=cpu_workers,
+            ): index
+            for index, target in enumerate(targets)
+        }
+
+        completed = 0
+        for future in as_completed(future_map):
+            index = future_map[future]
+            execution = future.result()
+            executions[index] = execution
+            completed += 1
+            if vehicle_progress_callback:
+                vehicle_progress_callback(
+                    completed,
+                    len(targets),
+                    execution.analysis_run.vehicle.name,
+                )
+
+    return [execution for execution in executions if execution is not None]
+
+
+def _wrap_fetch_progress_callback(
+    vehicle_name: str,
+    callback: FetchProgressCallback | None,
+) -> FetchProgressCallback | None:
+    if callback is None:
+        return None
+
+    def wrapped(
+        index: int,
+        total: int,
+        chunk: tuple[int, int],
+        row_count: int = 0,
+    ) -> None:
+        callback(index, total, chunk, row_count, vehicle_name=vehicle_name)
+
+    return wrapped
+
+
+def _wrap_analyze_progress_callback(
+    vehicle_name: str,
+    callback: AnalyzeProgressCallback | None,
+) -> AnalyzeProgressCallback | None:
+    if callback is None:
+        return None
+
+    def wrapped(stage: str, *values: int) -> None:
+        callback(stage, *values, vehicle_name=vehicle_name)
+
+    return wrapped
+
+
+def _execute_vehicle_analysis(
+    *,
+    client: OmnicommClient,
+    target: VehicleAnalysisTarget,
+    chunks: list[tuple[int, int]],
+    source: str,
+    config: AnalysisConfig | None,
+    fetch_progress_callback: FetchProgressCallback | None,
+    analyze_progress_callback: AnalyzeProgressCallback | None,
+    io_workers: int | None,
+    cpu_workers: int | None,
+) -> FuelAnalysisExecution:
+    vehicle = target.vehicle
+    calibration_table = target.calibration_table
+    resolved_io_workers = resolve_io_workers(io_workers, len(chunks))
+    resolved_cpu_workers = resolve_cpu_workers(cpu_workers, len(chunks))
+
     raw_rows = fetch_click_log_chunks(
         client=client,
         terminal_id=vehicle.terminal_id,
         chunks=chunks,
-        progress_callback=progress_callback,
-        max_workers=max_workers,
+        progress_callback=fetch_progress_callback,
+        max_workers=resolved_io_workers,
     )
     calibration_grid = grid_from_model(calibration_table)
-    result = analyze_fuel_telemetry(raw_rows, calibration_grid, config or AnalysisConfig())
+
+    def _analysis_progress(*args) -> None:
+        if analyze_progress_callback:
+            analyze_progress_callback(*args)
+
+    result = analyze_fuel_telemetry_parallel(
+        raw_rows,
+        calibration_grid,
+        chunks=chunks,
+        config=config or AnalysisConfig(),
+        cpu_workers=resolved_cpu_workers,
+        progress_callback=_analysis_progress,
+    )
     balance = calculate_fuel_balance(result)
     analysis_run = save_fuel_analysis_result(
         vehicle=vehicle,
@@ -85,6 +251,8 @@ def run_real_fuel_analysis(
             "chunks": len(chunks),
             "raw_rows": len(raw_rows),
             "mode": "omnicomm_click_log",
+            "io_workers": resolved_io_workers,
+            "cpu_workers": resolved_cpu_workers,
         },
     )
 
@@ -94,6 +262,8 @@ def run_real_fuel_analysis(
         balance=balance,
         raw_rows_count=len(raw_rows),
         chunks_count=len(chunks),
+        io_workers=resolved_io_workers,
+        cpu_workers=resolved_cpu_workers,
     )
 
 
@@ -102,14 +272,14 @@ def fetch_click_log_chunks(
     client: OmnicommClient,
     terminal_id: int,
     chunks: list[tuple[int, int]],
-    progress_callback: ProgressCallback | None = None,
-    max_workers: int = 4,
+    progress_callback: FetchProgressCallback | None = None,
+    max_workers: int | None = None,
 ) -> list[dict]:
     """Fetch Omnicomm click/log data for all chunks using a thread pool."""
     if not chunks:
         return []
 
-    workers = max(1, min(max_workers, len(chunks)))
+    workers = resolve_io_workers(max_workers, len(chunks))
     rows_by_chunk: dict[int, list[dict]] = {}
 
     with ThreadPoolExecutor(max_workers=workers) as executor:

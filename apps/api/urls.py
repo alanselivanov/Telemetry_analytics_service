@@ -9,9 +9,17 @@ from .views import (
     FuelEventListView,
     SensorFaultListView,
     TelemetryLogPointListView,
+    VehicleListView,
+    VehicleReportView,
 )
 
 urlpatterns = [
+    path("vehicles/", VehicleListView.as_view(), name="vehicle-list"),
+    path(
+        "reports/vehicle/<int:vehicle_id>/",
+        VehicleReportView.as_view(),
+        name="vehicle-report",
+    ),
     path("analysis-runs/", AnalysisRunListView.as_view(), name="analysis-run-list"),
     path("fuel-events/", FuelEventListView.as_view(), name="fuel-event-list"),
     path("sensor-faults/", SensorFaultListView.as_view(), name="sensor-fault-list"),

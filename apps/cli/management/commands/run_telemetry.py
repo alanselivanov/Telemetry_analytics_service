@@ -9,7 +9,13 @@ from pathlib import Path
 from django.db import connection
 from django.core.management.base import BaseCommand
 
-from analytics.services import FuelAnalysisExecution, run_mock_fuel_analysis, run_real_fuel_analysis
+from analytics.services import (
+    FuelAnalysisExecution,
+    VehicleAnalysisTarget,
+    run_mock_fuel_analysis,
+    run_multi_vehicle_fuel_analysis,
+    run_real_fuel_analysis,
+)
 from calibration.models import CalibrationTable, Vehicle
 from calibration.parser import CalibrationParseError, parse_calibration_file, save_calibration_grid
 from cli.time_range import (
@@ -88,10 +94,9 @@ class Command(BaseCommand):
         while True:
             self.stdout.write(self.style.MIGRATE_HEADING("\n--- Выбор ТС и периода ---"))
 
-            api_vehicle = self._select_vehicle(vehicles)
-            vehicle = self._sync_vehicle(api_vehicle)
-            calibration_table = self._ensure_active_calibration(vehicle)
-            if calibration_table is None:
+            api_vehicles = self._select_vehicles(vehicles)
+            targets = self._prepare_analysis_targets(api_vehicles)
+            if not targets:
                 continue
             date_from, date_to, chunks = self._prompt_time_range()
 
@@ -110,60 +115,126 @@ class Command(BaseCommand):
                     continue
 
                 try:
-                    execution = self._run_real_analysis(
+                    executions = self._run_real_analysis(
                         client=client,
-                        vehicle=vehicle,
-                        calibration_table=calibration_table,
+                        targets=targets,
                         chunks=chunks,
                     )
                 except (OmnicommAPIError, ValueError) as exc:
                     self.stderr.write(self.style.ERROR(f"\nОшибка анализа: {exc}\n"))
                     continue
 
-                if action == 1:
-                    self._print_diagnostics_report(execution)
-                elif action == 2:
-                    self._print_fuel_events_report(execution)
-                elif action == 3:
-                    self._print_balance_report(execution)
+                for execution in executions:
+                    if action == 1:
+                        self._print_diagnostics_report(execution)
+                    elif action == 2:
+                        self._print_fuel_events_report(execution)
+                    elif action == 3:
+                        self._print_balance_report(execution)
 
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f"\nРезультаты сохранены в БД. ID запуска анализа: {execution.analysis_run.id}\n"
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"\nРезультаты сохранены в БД. ID запуска анализа: "
+                            f"{execution.analysis_run.id}\n"
+                        )
                     )
-                )
 
-    def _select_vehicle(self, vehicles: list[VehicleInfo]) -> VehicleInfo:
+    def _select_vehicles(self, vehicles: list[VehicleInfo]) -> list[VehicleInfo]:
         self._print_vehicles(vehicles)
 
         while True:
             raw = input(
-                "Выберите ТС по номеру в списке, terminal_id или части имени: "
+                "Выберите ТС (номер, terminal_id, имя или несколько через запятую, "
+                "например: 5,12,33): "
             ).strip()
             if not raw:
                 self.stderr.write(self.style.WARNING("Введите номер, ID или имя ТС.\n"))
                 continue
 
-            if raw.isdigit():
-                value = int(raw)
-                if 1 <= value <= len(vehicles):
-                    return vehicles[value - 1]
-                for vehicle in vehicles:
-                    if vehicle.terminal_id == value:
-                        return vehicle
+            tokens = [token.strip() for token in raw.split(",") if token.strip()]
+            selected: list[VehicleInfo] = []
+            seen_terminal_ids: set[int] = set()
 
-            matches = [vehicle for vehicle in vehicles if raw.lower() in vehicle.name.lower()]
-            if len(matches) == 1:
-                return matches[0]
-            if len(matches) > 1:
-                self.stderr.write(
-                    self.style.WARNING("Найдено несколько ТС. Уточните запрос или введите ID.\n")
+            for token in tokens:
+                match = self._resolve_vehicle_token(token, vehicles)
+                if match is None:
+                    self.stderr.write(self.style.WARNING(f"ТС не найдено: {token}\n"))
+                    selected = []
+                    break
+                if match.terminal_id not in seen_terminal_ids:
+                    selected.append(match)
+                    seen_terminal_ids.add(match.terminal_id)
+            else:
+                if selected:
+                    if len(selected) > 1:
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f"Выбрано ТС: {len(selected)} "
+                                f"(параллельная обработка включена).\n"
+                            )
+                        )
+                    return selected
+
+            self.stderr.write(self.style.WARNING("Попробуйте ещё раз.\n"))
+
+    def _resolve_vehicle_token(
+        self,
+        token: str,
+        vehicles: list[VehicleInfo],
+    ) -> VehicleInfo | None:
+        if token.isdigit():
+            value = int(token)
+            if 1 <= value <= len(vehicles):
+                return vehicles[value - 1]
+            for vehicle in vehicles:
+                if vehicle.terminal_id == value:
+                    return vehicle
+            return None
+
+        matches = [vehicle for vehicle in vehicles if token.lower() in vehicle.name.lower()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            self.stderr.write(
+                self.style.WARNING(
+                    f"Найдено несколько ТС по запросу '{token}'. "
+                    "Уточните номер или terminal_id.\n"
                 )
-                for match in matches[:10]:
-                    self.stdout.write(f"  {match.name} (terminal_id: {match.terminal_id})")
-                continue
+            )
+            for match in matches[:10]:
+                self.stdout.write(f"  {match.name} (terminal_id: {match.terminal_id})")
+            return None
+        return None
 
-            self.stderr.write(self.style.WARNING("ТС не найдено. Попробуйте ещё раз.\n"))
+    def _prepare_analysis_targets(
+        self,
+        api_vehicles: list[VehicleInfo],
+    ) -> list[VehicleAnalysisTarget]:
+        targets: list[VehicleAnalysisTarget] = []
+
+        for api_vehicle in api_vehicles:
+            vehicle = self._sync_vehicle(api_vehicle)
+            calibration_table = self._ensure_active_calibration(vehicle)
+            if calibration_table is None:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"ТС пропущено из-за отсутствия тарировки: {vehicle.name}\n"
+                    )
+                )
+                continue
+            targets.append(
+                VehicleAnalysisTarget(
+                    vehicle=vehicle,
+                    calibration_table=calibration_table,
+                )
+            )
+
+        if not targets:
+            self.stdout.write("Нет ТС с активной тарировкой для анализа.\n")
+        return targets
+
+    def _select_vehicle(self, vehicles: list[VehicleInfo]) -> VehicleInfo:
+        return self._select_vehicles(vehicles)[0]
 
     def _prompt_time_range(self) -> tuple[int, int, list[tuple[int, int]]]:
         while True:
@@ -308,39 +379,103 @@ class Command(BaseCommand):
         self,
         *,
         client: OmnicommClient,
-        vehicle: Vehicle,
-        calibration_table: CalibrationTable,
+        targets: list[VehicleAnalysisTarget],
         chunks: list[tuple[int, int]],
-    ) -> FuelAnalysisExecution:
+    ) -> list[FuelAnalysisExecution]:
         self.stdout.write(self.style.MIGRATE_HEADING("\n--- Загрузка и анализ данных ---"))
+        self.stdout.flush()
 
-        def progress(index: int, total: int, chunk: tuple[int, int], row_count: int = 0) -> None:
+        current_vehicle = {"name": targets[0].vehicle.name if len(targets) == 1 else ""}
+
+        def fetch_progress(
+            index: int,
+            total: int,
+            chunk: tuple[int, int],
+            row_count: int = 0,
+            vehicle_name: str = "",
+        ) -> None:
             suffix = f" ({row_count} строк)" if row_count else " (0 строк)"
+            label = vehicle_name or current_vehicle["name"]
+            if label:
+                prefix = f"[API] {label} — чанк {index}/{total}: "
+            else:
+                prefix = f"[API] Чанк {index}/{total}: "
             self.stdout.write(
-                f"[API] Чанк {index}/{total}: "
-                f"{format_timestamp(chunk[0])} -> {format_timestamp(chunk[1])}{suffix}"
+                f"{prefix}{format_timestamp(chunk[0])} -> "
+                f"{format_timestamp(chunk[1])}{suffix}"
             )
+            self.stdout.flush()
 
-        execution = run_real_fuel_analysis(
-            client=client,
-            vehicle=vehicle,
-            calibration_table=calibration_table,
-            chunks=chunks,
-            progress_callback=progress,
-        )
-        self._print_execution_header(execution, vehicle.name)
-        if execution.raw_rows_count == 0:
+        def analyze_progress(stage: str, *values: int, vehicle_name: str = "") -> None:
+            label = f"{vehicle_name}: " if vehicle_name else ""
+            if stage == "convert":
+                index, total, point_count = values
+                self.stdout.write(
+                    f"[CPU] {label}Интерполяция сегмента {index}/{total}: {point_count} точек"
+                )
+            elif stage == "merge":
+                (point_count,) = values
+                self.stdout.write(f"[CPU] {label}Слияние временной шкалы: {point_count} точек")
+            elif stage == "events":
+                (point_count,) = values
+                self.stdout.write(
+                    f"[CPU] {label}Поиск заправок/сливов и диагностика: {point_count} точек"
+                )
+            elif stage == "done":
+                point_count, refuels, drains, diagnostics = values
+                self.stdout.write(
+                    f"[CPU] {label}Готово: {point_count} точек, "
+                    f"заправок {refuels}, сливов {drains}, эпизодов ДУТ {diagnostics}"
+                )
+            self.stdout.flush()
+
+        def vehicle_progress(completed: int, total: int, vehicle_name: str) -> None:
+            current_vehicle["name"] = vehicle_name
             self.stdout.write(
-                self.style.WARNING(
-                    "\nВнимание: API не вернул ни одной строки телеметрии за выбранный период.\n"
-                    f"  terminal_id       : {vehicle.terminal_id}\n"
-                    "  Возможные причины : нет ДУТ на ТС, ТС не выходило на связь, "
-                    "нет прав на отчёт «Журнал», или за период нет записей LLS.\n"
-                    "  Совет             : проверьте тот же период в веб-интерфейсе Omnicomm "
-                    "или выберите другое ТС (например, трактор с подтверждёнными данными).\n"
+                self.style.SUCCESS(
+                    f"[Параллельно] Завершено ТС {completed}/{total}: {vehicle_name}"
                 )
             )
-        return execution
+            self.stdout.flush()
+
+        if len(targets) == 1:
+            target = targets[0]
+            execution = run_real_fuel_analysis(
+                client=client,
+                vehicle=target.vehicle,
+                calibration_table=target.calibration_table,
+                chunks=chunks,
+                fetch_progress_callback=fetch_progress,
+                analyze_progress_callback=analyze_progress,
+            )
+            self._print_execution_header(execution, target.vehicle.name)
+            if execution.raw_rows_count == 0:
+                self._print_empty_data_warning(target.vehicle)
+            return [execution]
+
+        executions = run_multi_vehicle_fuel_analysis(
+            client=client,
+            targets=targets,
+            chunks=chunks,
+            vehicle_progress_callback=vehicle_progress,
+            fetch_progress_callback=fetch_progress,
+            analyze_progress_callback=analyze_progress,
+        )
+        for execution in executions:
+            self._print_execution_header(execution, execution.analysis_run.vehicle.name)
+            if execution.raw_rows_count == 0:
+                self._print_empty_data_warning(execution.analysis_run.vehicle)
+        return executions
+
+    def _print_empty_data_warning(self, vehicle: Vehicle) -> None:
+        self.stdout.write(
+            self.style.WARNING(
+                "\nВнимание: API не вернул ни одной строки телеметрии за выбранный период.\n"
+                f"  terminal_id       : {vehicle.terminal_id}\n"
+                "  Возможные причины : нет ДУТ на ТС, ТС не выходило на связь, "
+                "нет прав на отчёт «Журнал», или за период нет записей LLS.\n"
+            )
+        )
 
     def _print_execution_header(self, execution: FuelAnalysisExecution, vehicle_name: str) -> None:
         self.stdout.write(
@@ -350,6 +485,8 @@ class Command(BaseCommand):
             f"  Точек телеметрии : {len(execution.result.points)}\n"
             f"  Сырых строк API  : {execution.raw_rows_count}\n"
             f"  Чанков           : {execution.chunks_count}\n"
+            f"  Потоков API      : {execution.io_workers}\n"
+            f"  Потоков CPU      : {execution.cpu_workers}\n"
         )
 
     def _print_diagnostics_report(self, execution: FuelAnalysisExecution) -> None:

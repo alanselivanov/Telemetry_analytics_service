@@ -88,7 +88,15 @@ class OmnicommClient:
         self._click_log_endpoint: str = config["click_log_endpoint"]
         self._timeout = timeout if timeout is not None else config["timeout"]
         self._http = requests.Session()
-        self._request_lock = threading.Lock()
+        self._thread_local = threading.local()
+
+    def _get_thread_http(self) -> requests.Session:
+        """Return a requests.Session bound to the current thread."""
+        session = getattr(self._thread_local, "http", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.http = session
+        return session
 
     @property
     def is_authenticated(self) -> bool:
@@ -213,13 +221,12 @@ class OmnicommClient:
         }
 
         try:
-            with self._request_lock:
-                response = self._http.post(
-                    self._click_log_endpoint,
-                    json=payload,
-                    headers=self._build_headers(),
-                    timeout=self._timeout,
-                )
+            response = self._get_thread_http().post(
+                self._click_log_endpoint,
+                json=payload,
+                headers=self._build_headers(),
+                timeout=self._timeout,
+            )
         except requests.RequestException as exc:
             raise OmnicommAPIError(f"Click log request failed: {exc}") from exc
 

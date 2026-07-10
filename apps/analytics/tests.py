@@ -268,6 +268,35 @@ class FuelAnalyticsTests(SimpleTestCase):
         self.assertGreaterEqual(balance.estimated_consumption_litres, 0)
 
 
+    def test_progress_wrappers_pass_vehicle_name_as_keyword(self):
+        from .services import (
+            _wrap_analyze_progress_callback,
+            _wrap_fetch_progress_callback,
+        )
+
+        fetch_calls: list[dict] = []
+        analyze_calls: list[dict] = []
+
+        def fetch_callback(*args, **kwargs):
+            fetch_calls.append({"args": args, "kwargs": kwargs})
+
+        def analyze_callback(*args, **kwargs):
+            analyze_calls.append({"args": args, "kwargs": kwargs})
+
+        wrapped_fetch = _wrap_fetch_progress_callback("ТС-1", fetch_callback)
+        wrapped_analyze = _wrap_analyze_progress_callback("ТС-1", analyze_callback)
+
+        assert wrapped_fetch is not None
+        assert wrapped_analyze is not None
+
+        wrapped_fetch(1, 2, (100, 200), 5)
+        wrapped_analyze("convert", 1, 2, 5)
+
+        self.assertEqual(fetch_calls[0]["kwargs"], {"vehicle_name": "ТС-1"})
+        self.assertEqual(analyze_calls[0]["args"], ("convert", 1, 2, 5))
+        self.assertEqual(analyze_calls[0]["kwargs"], {"vehicle_name": "ТС-1"})
+
+
 class FetchClickLogChunksTests(SimpleTestCase):
     def test_merges_chunks_in_order_and_sorts_by_event_date(self):
         client = MockClickLogClient(

@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
@@ -62,15 +64,18 @@ class OmnicommClientClickLogTests(SimpleTestCase):
         response_mock.status_code = 200
         response_mock.json.return_value = {"columns": [{"EVENT_DATE": 1, "LLS_CODE": [1, 2]}]}
 
-        with patch.object(client._http, "post", return_value=response_mock) as post_mock:
+        with patch.object(client, "_get_thread_http") as session_factory:
+            session = MagicMock()
+            session.post.return_value = response_mock
+            session_factory.return_value = session
             result = client.fetch_click_log(
                 terminal_id=303020190,
                 date_from=1_770_000_000,
                 date_to=1_770_086_400,
             )
 
-        post_mock.assert_called_once()
-        payload = post_mock.call_args.kwargs["json"]
+        session.post.assert_called_once()
+        payload = session.post.call_args.kwargs["json"]
         self.assertEqual(payload["groups"], ["GENERAL", "LLS"])
         self.assertEqual(payload["columns"], CLICK_LOG_DEFAULT_COLUMNS)
         self.assertEqual(len(result["columns"]), 1)
@@ -91,7 +96,10 @@ class OmnicommClientClickLogTests(SimpleTestCase):
         response_mock.status_code = 200
         response_mock.json.return_value = {"columns": []}
 
-        with patch.object(client._http, "post", return_value=response_mock) as post_mock:
+        with patch.object(client, "_get_thread_http") as session_factory:
+            session = MagicMock()
+            session.post.return_value = response_mock
+            session_factory.return_value = session
             client.fetch_click_log(
                 terminal_id=303020190,
                 date_from=1_770_000_000,
@@ -99,5 +107,58 @@ class OmnicommClientClickLogTests(SimpleTestCase):
                 groups=[],
             )
 
-        payload = post_mock.call_args.kwargs["json"]
+        payload = session.post.call_args.kwargs["json"]
         self.assertEqual(payload["groups"], [])
+
+    def test_fetch_click_log_uses_thread_local_http_sessions(self):
+        config = {
+            "login_endpoint": "https://example.test/login",
+            "vehicle_tree_endpoint": "https://example.test/tree",
+            "click_log_endpoint": "https://example.test/click/log",
+            "timeout": 5,
+        }
+        client = OmnicommClient(timeout=5)
+        client.jwt = "header.payload.signature"
+        client.server_name = "test-server"
+
+        barrier = threading.Barrier(2)
+        active = {"count": 0}
+        lock = threading.Lock()
+
+        def slow_post(*args, **kwargs):
+            with lock:
+                active["count"] += 1
+                current = active["count"]
+            barrier.wait(timeout=2)
+            with lock:
+                active["count"] -= 1
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {"columns": []}
+            self.assertGreaterEqual(current, 1)
+            return response
+
+        with patch("omnicomm.client._load_omnicomm_config", return_value=config):
+            client = OmnicommClient(timeout=5)
+            client.jwt = "header.payload.signature"
+            client.server_name = "test-server"
+
+        with patch.object(client, "_get_thread_http") as session_factory:
+            session = MagicMock()
+            session.post.side_effect = slow_post
+            session_factory.return_value = session
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        client.fetch_click_log,
+                        terminal_id=303020190,
+                        date_from=1_770_000_000,
+                        date_to=1_770_086_400,
+                    )
+                    for _ in range(2)
+                ]
+                for future in futures:
+                    future.result()
+
+        self.assertEqual(session.post.call_count, 2)

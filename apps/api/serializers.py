@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from analytics.services import FuelBalance
+from calibration.models import Vehicle
 from reports.models import AnalysisRun, FuelEvent, SensorFault, TelemetryLogPoint
+from reports.services import VehicleHistoricalReport
+
+
+class VehicleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Vehicle
+        fields = ["id", "terminal_id", "name", "external_uuid", "created_at", "updated_at"]
 
 
 class AnalysisRunSerializer(serializers.ModelSerializer):
@@ -83,3 +92,37 @@ class TelemetryLogPointSerializer(serializers.ModelSerializer):
             "litres",
             "smoothed_litres",
         ]
+
+
+class FuelBalanceSerializer(serializers.Serializer):
+    start_litres = serializers.FloatField()
+    end_litres = serializers.FloatField()
+    delta_litres = serializers.FloatField()
+    refueled_litres = serializers.FloatField()
+    drained_litres = serializers.FloatField()
+    estimated_consumption_litres = serializers.FloatField()
+
+    @classmethod
+    def from_balance(cls, balance: FuelBalance) -> "FuelBalanceSerializer":
+        return cls(balance)
+
+
+class VehicleHistoricalReportSerializer:
+    """Build JSON payload for the vehicle historical report endpoint."""
+
+    @classmethod
+    def from_report(cls, report: VehicleHistoricalReport) -> dict:
+        return {
+            "vehicle": VehicleSerializer(report.vehicle).data,
+            "period": {"from": report.date_from, "to": report.date_to},
+            "summary": report.summary,
+            "balance": FuelBalanceSerializer(report.balance).data,
+            "analysis_runs": AnalysisRunSerializer(report.analysis_runs, many=True).data,
+            "refuels": FuelEventSerializer(report.refuels, many=True).data,
+            "drains": FuelEventSerializer(report.drains, many=True).data,
+            "sensor_faults": SensorFaultSerializer(report.sensor_faults, many=True).data,
+            "telemetry_points": TelemetryLogPointSerializer(
+                report.telemetry_points,
+                many=True,
+            ).data,
+        }

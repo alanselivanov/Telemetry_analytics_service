@@ -181,3 +181,15 @@ OMNICOMM_LOGIN_URL = _required_env("OMNICOMM_LOGIN_URL")
 OMNICOMM_VEHICLE_TREE_PATH = _required_env("OMNICOMM_VEHICLE_TREE_PATH")
 OMNICOMM_CLICK_LOG_PATH = _required_env("OMNICOMM_CLICK_LOG_PATH")
 OMNICOMM_REQUEST_TIMEOUT = int(_required_env("OMNICOMM_REQUEST_TIMEOUT"))
+
+# Параллельная обработка (Этап 4) — значения из .env, 0 означает «авто»
+ANALYTICS_IO_MAX_WORKERS = int(os.getenv("ANALYTICS_IO_MAX_WORKERS", "0"))
+ANALYTICS_CPU_MAX_WORKERS = int(os.getenv("ANALYTICS_CPU_MAX_WORKERS", "0"))
+ANALYTICS_MIN_POINTS_FOR_PARALLEL = int(
+    os.getenv("ANALYTICS_MIN_POINTS_FOR_PARALLEL", "1000")
+)
+
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 100,
+}

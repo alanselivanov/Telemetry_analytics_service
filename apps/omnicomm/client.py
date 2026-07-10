@@ -4,13 +4,42 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import requests
 
 from .exceptions import OmnicommAPIError, OmnicommAuthError
 from .permissions import REPORT_PERMISSION_MAP, REPORT_PERMISSION_PREFIXES, humanize_permission
+
+CLICK_LOG_DEFAULT_COLUMNS = ["EVENT_DATE", "SPEED", "LLS_CODE"]
+CLICK_LOG_DATA_GROUPS = (
+    "GENERAL",
+    "NAVI",
+    "UNIVAL",
+    "CAN",
+    "OBD",
+    "MODBUS",
+    "LLS",
+    "IQFREEZE",
+)
+
+
+def default_groups_for_columns(columns: Sequence[str]) -> list[str]:
+    """Pick Omnicomm data groups required for the requested click/log columns."""
+    groups: list[str] = ["GENERAL"]
+    if any(column.startswith("LLS") for column in columns):
+        groups.append("LLS")
+    return groups
+
+
+def extract_click_log_rows(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return telemetry rows from a click/log response object."""
+    columns = response.get("columns")
+    if not isinstance(columns, list):
+        return []
+    return [row for row in columns if isinstance(row, dict)]
 
 
 def _load_omnicomm_config() -> dict[str, Any]:
@@ -21,6 +50,7 @@ def _load_omnicomm_config() -> dict[str, Any]:
     return {
         "login_endpoint": settings.OMNICOMM_LOGIN_URL,
         "vehicle_tree_endpoint": f"{base_url}{settings.OMNICOMM_VEHICLE_TREE_PATH}",
+        "click_log_endpoint": f"{base_url}/v1/click/log",
         "timeout": settings.OMNICOMM_REQUEST_TIMEOUT,
     }
 
@@ -49,8 +79,10 @@ class OmnicommClient:
         self.server_name: str | None = None
         self._login_endpoint: str = config["login_endpoint"]
         self._vehicle_tree_endpoint: str = config["vehicle_tree_endpoint"]
+        self._click_log_endpoint: str = config["click_log_endpoint"]
         self._timeout = timeout if timeout is not None else config["timeout"]
         self._http = requests.Session()
+        self._request_lock = threading.Lock()
 
     @property
     def is_authenticated(self) -> bool:
@@ -137,6 +169,71 @@ class OmnicommClient:
             raise OmnicommAPIError("Vehicle tree response is not valid JSON.") from exc
 
         return self._normalize_tree_response(raw_tree)
+
+    def fetch_click_log(
+        self,
+        *,
+        terminal_id: int,
+        date_from: int,
+        date_to: int,
+        columns: list[str] | None = None,
+        groups: list[Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Fetch raw telemetry rows from ``POST /ls/api/v1/click/log``.
+
+        Request body shape (``groups`` auto-includes ``LLS`` when ``LLS_CODE`` is requested)::
+
+            {
+                "terminalId": 303020190,
+                "dateFrom": 1781517600,
+                "dateTo": 1781521200,
+                "groups": ["GENERAL", "LLS"],
+                "columns": ["EVENT_DATE", "SPEED", "LLS_CODE"]
+            }
+        """
+        resolved_columns = list(columns or CLICK_LOG_DEFAULT_COLUMNS)
+        resolved_groups = (
+            list(groups)
+            if groups is not None
+            else default_groups_for_columns(resolved_columns)
+        )
+        payload = {
+            "terminalId": int(terminal_id),
+            "dateFrom": int(date_from),
+            "dateTo": int(date_to),
+            "groups": resolved_groups,
+            "columns": resolved_columns,
+        }
+
+        try:
+            with self._request_lock:
+                response = self._http.post(
+                    self._click_log_endpoint,
+                    json=payload,
+                    headers=self._build_headers(),
+                    timeout=self._timeout,
+                )
+        except requests.RequestException as exc:
+            raise OmnicommAPIError(f"Click log request failed: {exc}") from exc
+
+        if response.status_code != 200:
+            detail = self._extract_error_detail(response)
+            raise OmnicommAPIError(
+                f"Click log request failed ({response.status_code}): {detail}"
+            )
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise OmnicommAPIError("Click log response is not valid JSON.") from exc
+
+        if not isinstance(data, dict):
+            raise OmnicommAPIError("Click log response must be a JSON object.")
+        if not isinstance(data.get("columns"), list):
+            raise OmnicommAPIError("Click log response is missing 'columns' array.")
+
+        return data
 
     @staticmethod
     def _normalize_tree_response(raw_tree: Any) -> list[dict[str, Any]]:

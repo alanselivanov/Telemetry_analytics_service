@@ -57,7 +57,12 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
+    "api.apps.ApiConfig",
+    "analytics.apps.AnalyticsConfig",
+    "calibration.apps.CalibrationConfig",
     "omnicomm.apps.OmnicommConfig",
+    "reports.apps.ReportsConfig",
     "cli.apps.CliConfig",
 ]
 
@@ -94,11 +99,28 @@ WSGI_APPLICATION = "telemetry_analytics_service.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": os.getenv("DATABASE_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": BASE_DIR / os.getenv("DATABASE_NAME", "db.sqlite3"),
+
+def _database_config() -> dict:
+    engine = os.getenv("DATABASE_ENGINE", "django.db.backends.sqlite3").strip()
+
+    if engine == "django.db.backends.sqlite3":
+        return {
+            "ENGINE": engine,
+            "NAME": BASE_DIR / os.getenv("DATABASE_NAME", "db.sqlite3"),
+        }
+
+    return {
+        "ENGINE": engine,
+        "NAME": os.getenv("DATABASE_NAME", "telemetry_analytics"),
+        "USER": os.getenv("DATABASE_USER", "postgres"),
+        "PASSWORD": os.getenv("DATABASE_PASSWORD", ""),
+        "HOST": os.getenv("DATABASE_HOST", "127.0.0.1"),
+        "PORT": os.getenv("DATABASE_PORT", "5432"),
     }
+
+
+DATABASES = {
+    "default": _database_config(),
 }
 
 

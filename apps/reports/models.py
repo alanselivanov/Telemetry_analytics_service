@@ -6,7 +6,6 @@ from calibration.models import CalibrationTable, Vehicle
 
 
 class AnalysisRun(models.Model):
-    """One execution of fuel analytics for a vehicle and period."""
 
     vehicle = models.ForeignKey(
         Vehicle,
@@ -35,7 +34,6 @@ class AnalysisRun(models.Model):
 
 
 class TelemetryLogPoint(models.Model):
-    """Raw and processed telemetry point from Omnicomm click/log."""
 
     analysis_run = models.ForeignKey(
         AnalysisRun,
@@ -61,7 +59,6 @@ class TelemetryLogPoint(models.Model):
 
 
 class FuelEvent(models.Model):
-    """Persisted refuel or drain event."""
 
     class EventType(models.TextChoices):
         REFUEL = "REFUEL", "Refuel"
@@ -94,7 +91,6 @@ class FuelEvent(models.Model):
 
 
 class SensorFault(models.Model):
-    """Persisted fuel sensor diagnostics issue."""
 
     analysis_run = models.ForeignKey(
         AnalysisRun,

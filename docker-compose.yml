@@ -3,10 +3,12 @@ services:
     image: postgres:16
     container_name: telemetry_analytics_pg
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "12345789"
-      POSTGRES_DB: telemetry_analytics_service
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required in .env}
+      POSTGRES_DB: ${DATABASE_NAME:-telemetry_analytics_service}
     ports:
       - "5433:5432"
     volumes:

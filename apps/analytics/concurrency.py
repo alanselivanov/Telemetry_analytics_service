@@ -1,4 +1,3 @@
-"""Concurrency helpers for parallel API fetch and CPU-bound fuel analytics."""
 
 from __future__ import annotations
 
@@ -26,7 +25,6 @@ ProgressCallback = Callable[..., None]
 
 
 def resolve_io_workers(requested: int | None = None, task_count: int = 1) -> int:
-    """Resolve the number of threads for network-bound Omnicomm requests."""
     if requested is not None and requested > 0:
         return max(1, min(requested, task_count))
     configured = _env_int("ANALYTICS_IO_MAX_WORKERS", 0)
@@ -36,7 +34,6 @@ def resolve_io_workers(requested: int | None = None, task_count: int = 1) -> int
 
 
 def resolve_cpu_workers(requested: int | None = None, task_count: int = 1) -> int:
-    """Resolve worker threads for CPU-bound telemetry math."""
     if requested is not None and requested > 0:
         return max(1, min(requested, task_count))
     configured = _env_int("ANALYTICS_CPU_MAX_WORKERS", 0)
@@ -46,7 +43,6 @@ def resolve_cpu_workers(requested: int | None = None, task_count: int = 1) -> in
 
 
 def should_parallelize(point_count: int, segment_count: int) -> bool:
-    """Decide whether parallel CPU processing is worth the overhead."""
     min_points = _env_int("ANALYTICS_MIN_POINTS_FOR_PARALLEL", 1000)
     return segment_count > 1 and point_count >= min_points
 
@@ -55,7 +51,6 @@ def partition_rows_by_chunks(
     rows: Sequence[dict],
     chunks: Sequence[tuple[int, int]],
 ) -> list[list[dict]]:
-    """Assign raw API rows to the API chunk they belong to."""
     if not chunks:
         return [list(rows)]
 
@@ -88,12 +83,6 @@ def analyze_fuel_telemetry_parallel(
     cpu_workers: int | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> FuelAnalysisResult:
-    """
-    Analyze telemetry using a hybrid pipeline:
-
-    1. Convert each time chunk to litres in parallel (thread pool).
-    2. Merge the timeline and detect events sequentially to preserve accuracy.
-    """
     settings = config or AnalysisConfig()
     rows = list(raw_points)
     chunk_ranges = list(chunks or [])
@@ -154,7 +143,6 @@ def run_in_thread_pool(
     max_workers: int,
     progress_callback: ProgressCallback | None = None,
 ) -> list:
-    """Execute homogeneous callables in a shared thread pool."""
     if not tasks:
         return []
 

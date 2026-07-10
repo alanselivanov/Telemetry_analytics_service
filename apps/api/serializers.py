@@ -1,4 +1,3 @@
-"""DRF serializers for aggregated fuel analytics."""
 
 from __future__ import annotations
 
@@ -111,7 +110,6 @@ class FuelBalanceSerializer(serializers.Serializer):
 
 
 class VehicleHistoricalReportSerializer:
-    """Build JSON payload for the vehicle historical report endpoint."""
 
     @classmethod
     def from_report(cls, report: VehicleHistoricalReport) -> dict:

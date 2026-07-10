@@ -1,4 +1,3 @@
-"""Application-level orchestration for fuel analytics workflows."""
 
 from __future__ import annotations
 
@@ -35,7 +34,6 @@ MIN_MEANINGFUL_LEVEL_LITRES = 0.5
 
 @dataclass(frozen=True)
 class FuelBalance:
-    """Fuel balance summary for an analysis result."""
 
     start_litres: float
     end_litres: float
@@ -50,7 +48,6 @@ class FuelBalance:
 
 @dataclass(frozen=True)
 class FuelAnalysisExecution:
-    """Saved execution returned to CLI/API callers."""
 
     analysis_run: AnalysisRun
     result: FuelAnalysisResult
@@ -63,7 +60,6 @@ class FuelAnalysisExecution:
 
 @dataclass(frozen=True)
 class VehicleAnalysisTarget:
-    """Vehicle and calibration pair prepared for analysis."""
 
     vehicle: Vehicle
     calibration_table: CalibrationTable
@@ -82,7 +78,6 @@ def run_real_fuel_analysis(
     io_workers: int | None = None,
     cpu_workers: int | None = None,
 ) -> FuelAnalysisExecution:
-    """Download click/log chunks in parallel, analyze in hybrid mode, and persist."""
     execution = _execute_vehicle_analysis(
         client=client,
         target=VehicleAnalysisTarget(
@@ -113,7 +108,6 @@ def run_multi_vehicle_fuel_analysis(
     io_workers: int | None = None,
     cpu_workers: int | None = None,
 ) -> list[FuelAnalysisExecution]:
-    """Analyze several vehicles concurrently without blocking on each one sequentially."""
     if not targets:
         return []
 
@@ -280,7 +274,6 @@ def fetch_click_log_chunks(
     progress_callback: FetchProgressCallback | None = None,
     max_workers: int | None = None,
 ) -> list[dict]:
-    """Fetch Omnicomm click/log data for all chunks using a thread pool."""
     if not chunks:
         return []
 
@@ -315,7 +308,6 @@ def fetch_click_log_chunks(
 
 
 def _dedupe_click_log_rows(rows: list[dict]) -> list[dict]:
-    """Drop exact duplicate rows returned by Omnicomm click/log."""
     seen: set[tuple] = set()
     unique_rows: list[dict] = []
 
@@ -334,7 +326,6 @@ def _dedupe_click_log_rows(rows: list[dict]) -> list[dict]:
 
 
 def run_mock_fuel_analysis(*, source: str = "run_telemetry_mock") -> FuelAnalysisExecution:
-    """Run analytics on built-in mock anomalies and save the result."""
     vehicle, _ = Vehicle.objects.update_or_create(
         terminal_id=MOCK_TERMINAL_ID,
         defaults={"name": MOCK_VEHICLE_NAME},
@@ -374,27 +365,51 @@ def run_mock_fuel_analysis(*, source: str = "run_telemetry_mock") -> FuelAnalysi
 
 
 def calculate_fuel_balance(result: FuelAnalysisResult) -> FuelBalance:
-    """Calculate basic balance and estimated consumption from processed points."""
     valid_points = [point for point in result.points if point.smoothed_litres is not None]
     refueled = sum(event.volume_litres for event in result.refuels)
     drained = sum(event.volume_litres for event in result.drains)
 
     if not valid_points:
-        return FuelBalance(0, 0, 0, round(refueled, 3), round(drained, 3), 0)
+        return build_fuel_balance(
+            start_litres=0.0,
+            end_litres=0.0,
+            refueled_litres=refueled,
+            drained_litres=drained,
+        )
 
     start, end, meaningful_count, unreliable = _resolve_boundary_levels(valid_points)
-    delta = end - start
-    consumption = max(0.0, start + refueled - drained - end)
-
-    return FuelBalance(
-        start_litres=round(start, 3),
-        end_litres=round(end, 3),
-        delta_litres=round(delta, 3),
-        refueled_litres=round(refueled, 3),
-        drained_litres=round(drained, 3),
-        estimated_consumption_litres=round(consumption, 3),
+    return build_fuel_balance(
+        start_litres=start,
+        end_litres=end,
+        refueled_litres=refueled,
+        drained_litres=drained,
         meaningful_points_count=meaningful_count,
         total_points_count=len(valid_points),
+        unreliable=unreliable,
+    )
+
+
+def build_fuel_balance(
+    *,
+    start_litres: float,
+    end_litres: float,
+    refueled_litres: float,
+    drained_litres: float,
+    meaningful_points_count: int = 0,
+    total_points_count: int = 0,
+    unreliable: bool = False,
+) -> FuelBalance:
+    delta = end_litres - start_litres
+    consumption = max(0.0, start_litres + refueled_litres - drained_litres - end_litres)
+    return FuelBalance(
+        start_litres=round(start_litres, 3),
+        end_litres=round(end_litres, 3),
+        delta_litres=round(delta, 3),
+        refueled_litres=round(refueled_litres, 3),
+        drained_litres=round(drained_litres, 3),
+        estimated_consumption_litres=round(consumption, 3),
+        meaningful_points_count=meaningful_points_count,
+        total_points_count=total_points_count,
         unreliable=unreliable,
     )
 
@@ -402,12 +417,6 @@ def calculate_fuel_balance(result: FuelAnalysisResult) -> FuelBalance:
 def _resolve_boundary_levels(
     valid_points: list,
 ) -> tuple[float, float, int, bool]:
-    """
-    Pick start/end levels from the first and last meaningful readings.
-
-    Leading and trailing points with code 0 / no signal often report 0.0 L
-    even when the tank had fuel later in the period.
-    """
     meaningful = [
         point
         for point in valid_points

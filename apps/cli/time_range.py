@@ -1,4 +1,3 @@
-"""Parse flexible time range strings and split long periods into API chunks."""
 
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ _UNIT_TO_SECONDS: dict[str, int] = {
 
 
 class TimeRangeParseError(ValueError):
-    """Raised when a time range string cannot be interpreted."""
+    pass
 
 
 def parse_time_range(text: str, now: datetime | None = None) -> tuple[int, int]:
@@ -79,11 +78,6 @@ def chunk_time_range(
     date_to: int,
     max_days: int = CHUNK_MAX_DAYS,
 ) -> list[tuple[int, int]]:
-    """
-    Split ``[date_from, date_to]`` into contiguous chunks of at most ``max_days`` days.
-
-    Each chunk starts exactly where the previous one ended, so no time is skipped.
-    """
     if date_from >= date_to:
         raise ValueError("dateFrom must be earlier than dateTo.")
 

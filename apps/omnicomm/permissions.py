@@ -1,4 +1,3 @@
-"""Mapping of Omnicomm JWT permission strings to human-readable report names."""
 
 from __future__ import annotations
 
@@ -7,14 +6,12 @@ import re
 REPORT_PERMISSION_PREFIXES = ("ase.reports.", "service.")
 
 REPORT_PERMISSION_MAP: dict[str, str] = {
-    # Основные отчёты
     "ase.reports.log": "Сырые данные (телеметрия)",
     "ase.reports.fueleventsreport": "Заправки и сливы топлива",
     "ase.reports.fuellevels": "Уровни топлива",
     "ase.reports.speed": "Превышения скорости",
     "ase.reports.enginerpm": "Обороты двигателя",
     "ase.reports.track": "Трек (маршрут)",
-    # Движение и работа
     "ase.reports.events": "События",
     "ase.reports.groupevents": "События по группам",
     "ase.reports.movementbyperiod": "Движение за период",
@@ -27,13 +24,11 @@ REPORT_PERMISSION_MAP: dict[str, str] = {
     "ase.reports.loadbytime": "Нагрузка по времени",
     "ase.reports.loaddistribution": "Распределение нагрузки",
     "ase.reports.shifts": "Смены",
-    # Топливо и техника
     "ase.reports.fuelconsumption": "Расход топлива",
     "ase.reports.voltage": "Напряжение",
     "ase.reports.temperature": "Температура",
     "ase.reports.enginehours": "Моточасы",
     "ase.reports.refrigeratorstate": "Состояние рефрижератора",
-    # Геозоны, водители, маршруты
     "ase.reports.geozones": "Геозоны",
     "ase.reports.geozonesreport": "Отчёт по геозонам",
     "ase.reports.drivers": "Водители",
@@ -41,12 +36,10 @@ REPORT_PERMISSION_MAP: dict[str, str] = {
     "ase.reports.delivery": "Доставки",
     "ase.reports.marchroute.routereport": "Маршрутный отчёт",
     "ase.reports.marchroute.currentruns": "Текущие рейсы",
-    # Карты и местоположение
     "ase.reports.location": "Местоположение",
     "ase.reports.location2": "Местоположение (v2)",
     "ase.reports.locationreport": "Отчёт по местоположению",
     "ase.reports.map2": "Карта",
-    # Сводные и групповые
     "ase.reports.summary": "Сводный отчёт",
     "ase.reports.consolidatedreport": "Консолидированный отчёт",
     "ase.reports.groupstat": "Статистика по группам",
@@ -59,7 +52,6 @@ REPORT_PERMISSION_MAP: dict[str, str] = {
     "ase.reports.mileage": "Пробег",
     "ase.reports.idle": "Простой",
     "ase.reports.drd": "DRD",
-    # Сервисные отчёты
     "service.reports": "Сервисные отчёты",
     "service.reports.fuelbalance": "Баланс топлива (сервис)",
     "service.reports.fuelsheet": "Топливная ведомость",
@@ -125,7 +117,6 @@ _COMPOUND_WORDS: tuple[str, ...] = (
 
 
 def humanize_permission(permission: str) -> str:
-    """Return a readable label for a permission not present in the mapping."""
     if permission in REPORT_PERMISSION_MAP:
         return REPORT_PERMISSION_MAP[permission]
 
@@ -143,7 +134,6 @@ def humanize_permission(permission: str) -> str:
 
 
 def _split_compound_slug(slug: str) -> str:
-    """Split glued identifiers like ``consolidatedreport`` into readable words."""
     if " " in slug:
         return _title_words(slug.split())
 

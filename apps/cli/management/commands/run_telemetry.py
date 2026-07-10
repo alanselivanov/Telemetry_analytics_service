@@ -1,4 +1,3 @@
-"""Main interactive entry point for the local telemetry application."""
 
 from __future__ import annotations
 
@@ -238,8 +237,6 @@ class Command(BaseCommand):
             self.stdout.write("Нет ТС с активной тарировкой для анализа.\n")
         return targets
 
-    def _select_vehicle(self, vehicles: list[VehicleInfo]) -> VehicleInfo:
-        return self._select_vehicles(vehicles)[0]
 
     def _prompt_time_range(self) -> tuple[int, int, list[tuple[int, int]]]:
         while True:

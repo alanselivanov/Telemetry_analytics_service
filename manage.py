@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-"""Django's command-line utility for administrative tasks."""
 import os
 import sys
 from pathlib import Path
@@ -14,7 +12,6 @@ def main():
 
     apps_dir = BASE_DIR / "apps"
     sys.path.insert(0, str(apps_dir))
-    """Run administrative tasks."""
     os.environ.setdefault(
         "DJANGO_SETTINGS_MODULE", "telemetry_analytics_service.settings"
     )

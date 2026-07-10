@@ -1,4 +1,3 @@
-"""Mock fuel telemetry scenarios for offline diagnostics demos."""
 
 from __future__ import annotations
 
@@ -23,7 +22,6 @@ MOCK_CALIBRATION = """\
 
 
 def build_mock_points() -> list[dict]:
-    """Generate telemetry with refuel, drain, long freeze, and jitter anomalies."""
     start = int(datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc).timestamp())
     points: list[dict] = []
     code_1 = 2300

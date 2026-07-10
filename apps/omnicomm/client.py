@@ -1,4 +1,3 @@
-"""Production-ready HTTP client for the Omnicomm Online API."""
 
 from __future__ import annotations
 
@@ -27,7 +26,6 @@ CLICK_LOG_DATA_GROUPS = (
 
 
 def default_groups_for_columns(columns: Sequence[str]) -> list[str]:
-    """Pick Omnicomm data groups required for the requested click/log columns."""
     groups: list[str] = ["GENERAL"]
     if any(column.startswith("LLS") for column in columns):
         groups.append("LLS")
@@ -35,7 +33,6 @@ def default_groups_for_columns(columns: Sequence[str]) -> list[str]:
 
 
 def extract_click_log_rows(response: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return telemetry rows from a click/log response object."""
     columns = response.get("columns")
     if not isinstance(columns, list):
         return []
@@ -43,7 +40,6 @@ def extract_click_log_rows(response: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _load_omnicomm_config() -> dict[str, Any]:
-    """Load Omnicomm endpoints from Django settings (.env)."""
     from django.conf import settings
 
     base_url = settings.OMNICOMM_BASE_URL.rstrip("/")
@@ -91,7 +87,6 @@ class OmnicommClient:
         self._thread_local = threading.local()
 
     def _get_thread_http(self) -> requests.Session:
-        """Return a requests.Session bound to the current thread."""
         session = getattr(self._thread_local, "http", None)
         if session is None:
             session = requests.Session()
@@ -193,19 +188,6 @@ class OmnicommClient:
         columns: list[str] | None = None,
         groups: list[Any] | None = None,
     ) -> dict[str, Any]:
-        """
-        Fetch raw telemetry rows from ``POST /ls/api/v1/click/log``.
-
-        Request body shape (``groups`` auto-includes ``LLS`` when ``LLS_CODE`` is requested)::
-
-            {
-                "terminalId": 303020190,
-                "dateFrom": 1781517600,
-                "dateTo": 1781521200,
-                "groups": ["GENERAL", "LLS"],
-                "columns": ["EVENT_DATE", "SPEED", "LLS_CODE"]
-            }
-        """
         resolved_columns = list(columns or CLICK_LOG_DEFAULT_COLUMNS)
         resolved_groups = (
             list(groups)

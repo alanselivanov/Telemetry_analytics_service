@@ -1,4 +1,3 @@
-"""Persistence helpers for analytics results."""
 
 from __future__ import annotations
 
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class VehicleHistoricalReport:
-    """Aggregated persisted analytics for one vehicle and period."""
 
     vehicle: Vehicle
     date_from: int
@@ -34,7 +32,6 @@ class VehicleHistoricalReport:
 
 
 def resolve_vehicle(vehicle_id: int) -> Vehicle:
-    """Resolve a vehicle by database id or Omnicomm terminal_id."""
     vehicle = Vehicle.objects.filter(pk=vehicle_id).first()
     if vehicle is not None:
         return vehicle
@@ -49,7 +46,6 @@ def get_vehicle_historical_report(
     include_telemetry: bool = False,
     telemetry_limit: int = 5000,
 ) -> VehicleHistoricalReport:
-    """Load persisted analytics for a vehicle that overlap the requested period."""
     vehicle = resolve_vehicle(vehicle_id)
 
     analysis_runs = tuple(
@@ -131,10 +127,14 @@ def _calculate_balance_from_queryset(
     refuels: tuple[FuelEvent, ...],
     drains: tuple[FuelEvent, ...],
 ) -> "FuelBalance":
-    from analytics.services import MIN_MEANINGFUL_LEVEL_LITRES, FuelBalance
+    from analytics.services import MIN_MEANINGFUL_LEVEL_LITRES, build_fuel_balance
 
     refueled = sum(event.volume_litres for event in refuels)
     drained = sum(event.volume_litres for event in drains)
+    total_points = points_queryset.filter(smoothed_litres__isnull=False).count()
+    meaningful_points = points_queryset.filter(
+        smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES
+    ).count()
 
     first = (
         points_queryset.filter(smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES)
@@ -147,54 +147,47 @@ def _calculate_balance_from_queryset(
         .values_list("smoothed_litres", flat=True)
         .first()
     )
-    total_points = points_queryset.filter(smoothed_litres__isnull=False).count()
-    meaningful_points = points_queryset.filter(
-        smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES
-    ).count()
 
-    if first is None or last is None:
-        first = (
-            points_queryset.filter(smoothed_litres__isnull=False)
-            .values_list("smoothed_litres", flat=True)
-            .first()
-        )
-        last = (
-            points_queryset.filter(smoothed_litres__isnull=False)
-            .order_by("-event_date")
-            .values_list("smoothed_litres", flat=True)
-            .first()
-        )
-        if first is None or last is None:
-            return FuelBalance(0, 0, 0, round(refueled, 3), round(drained, 3), 0)
-        start = float(first)
-        end = float(last)
-        return FuelBalance(
-            start_litres=round(start, 3),
-            end_litres=round(end, 3),
-            delta_litres=round(end - start, 3),
-            refueled_litres=round(refueled, 3),
-            drained_litres=round(drained, 3),
-            estimated_consumption_litres=round(max(0.0, start + refueled - drained - end), 3),
+    if first is not None and last is not None:
+        return build_fuel_balance(
+            start_litres=float(first),
+            end_litres=float(last),
+            refueled_litres=refueled,
+            drained_litres=drained,
             meaningful_points_count=meaningful_points,
             total_points_count=total_points,
-            unreliable=True,
+            unreliable=False,
         )
 
-    start = float(first)
-    end = float(last)
-    delta = end - start
-    consumption = max(0.0, start + refueled - drained - end)
+    first = (
+        points_queryset.filter(smoothed_litres__isnull=False)
+        .values_list("smoothed_litres", flat=True)
+        .first()
+    )
+    last = (
+        points_queryset.filter(smoothed_litres__isnull=False)
+        .order_by("-event_date")
+        .values_list("smoothed_litres", flat=True)
+        .first()
+    )
+    if first is None or last is None:
+        return build_fuel_balance(
+            start_litres=0.0,
+            end_litres=0.0,
+            refueled_litres=refueled,
+            drained_litres=drained,
+            meaningful_points_count=meaningful_points,
+            total_points_count=total_points,
+        )
 
-    return FuelBalance(
-        start_litres=round(start, 3),
-        end_litres=round(end, 3),
-        delta_litres=round(delta, 3),
-        refueled_litres=round(refueled, 3),
-        drained_litres=round(drained, 3),
-        estimated_consumption_litres=round(consumption, 3),
+    return build_fuel_balance(
+        start_litres=float(first),
+        end_litres=float(last),
+        refueled_litres=refueled,
+        drained_litres=drained,
         meaningful_points_count=meaningful_points,
         total_points_count=total_points,
-        unreliable=False,
+        unreliable=True,
     )
 
 
@@ -209,7 +202,6 @@ def save_fuel_analysis_result(
     source: str = "cli",
     metadata: dict | None = None,
 ) -> AnalysisRun:
-    """Persist telemetry points, fuel events, and sensor diagnostics."""
     analysis_run = AnalysisRun.objects.create(
         vehicle=vehicle,
         calibration_table=calibration_table,

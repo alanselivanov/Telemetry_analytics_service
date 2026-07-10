@@ -1,4 +1,3 @@
-"""Parsing and in-memory representation of fuel sensor calibration tables."""
 
 from __future__ import annotations
 
@@ -17,12 +16,11 @@ MAX_SENSOR_COUNT = 16
 
 
 class CalibrationParseError(ValueError):
-    """Raised when a calibration CSV/TXT file has invalid structure."""
+    pass
 
 
 @dataclass(frozen=True)
 class CalibrationRow:
-    """One parsed calibration row: sensor code and litres per tank."""
 
     sensor_code: int
     tank_litres: tuple[float, ...]
@@ -31,7 +29,6 @@ class CalibrationRow:
 
 @dataclass(frozen=True)
 class SensorCurve:
-    """Piecewise-linear curve for a single LLS sensor."""
 
     sensor_index: int
     points: tuple[tuple[int, float], ...]
@@ -39,7 +36,6 @@ class SensorCurve:
 
 @dataclass(frozen=True)
 class CalibrationGrid:
-    """Prepared interpolation grid built from calibration rows."""
 
     rows: tuple[CalibrationRow, ...]
     sensor_curves: tuple[SensorCurve, ...]
@@ -50,12 +46,6 @@ class CalibrationGrid:
 
 
 def parse_calibration_text(text: str) -> CalibrationGrid:
-    """
-    Parse semicolon-separated calibration content into an interpolation grid.
-
-    Format per TZ:
-    column 1 = sensor code (0-4095), columns 2..N = litres for each tank.
-    """
     rows: list[CalibrationRow] = []
     expected_tank_count: int | None = None
 
@@ -102,13 +92,11 @@ def parse_calibration_text(text: str) -> CalibrationGrid:
 
 
 def parse_calibration_file(path: str | Path, encoding: str = "utf-8-sig") -> CalibrationGrid:
-    """Parse a CSV/TXT calibration file from disk."""
     file_path = Path(path)
     return parse_calibration_text(file_path.read_text(encoding=encoding))
 
 
 def build_calibration_grid(rows: Iterable[CalibrationRow]) -> CalibrationGrid:
-    """Build per-sensor interpolation curves from code -> litres mapping."""
     sorted_rows = tuple(sorted(rows, key=lambda row: row.sensor_code))
     if not sorted_rows:
         raise CalibrationParseError("Calibration rows cannot be empty.")
@@ -131,7 +119,6 @@ def build_calibration_grid(rows: Iterable[CalibrationRow]) -> CalibrationGrid:
 
 
 def grid_from_model(table: CalibrationTable) -> CalibrationGrid:
-    """Build an interpolation grid from a persisted calibration table."""
     if table.raw_rows:
         rows = tuple(_calibration_row_from_raw(raw_row) for raw_row in table.raw_rows)
         return build_calibration_grid(rows)
@@ -171,7 +158,6 @@ def save_calibration_grid(
     source_filename: str = "",
     activate: bool = True,
 ) -> CalibrationTable:
-    """Persist a parsed grid and its points for one vehicle."""
     if activate:
         CalibrationTable.objects.filter(vehicle=vehicle, is_active=True).update(
             is_active=False

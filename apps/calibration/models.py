@@ -4,7 +4,6 @@ from django.db import models
 
 
 class Vehicle(models.Model):
-    """Vehicle known to the offline analytics system."""
 
     terminal_id = models.PositiveBigIntegerField(unique=True, db_index=True)
     name = models.CharField(max_length=255)
@@ -20,7 +19,6 @@ class Vehicle(models.Model):
 
 
 class CalibrationTable(models.Model):
-    """Fuel-level sensor calibration grid attached to a single vehicle."""
 
     vehicle = models.ForeignKey(
         Vehicle,
@@ -46,7 +44,6 @@ class CalibrationTable(models.Model):
 
 
 class CalibrationPoint(models.Model):
-    """One row of a calibration grid: sensor code and litres per tank."""
 
     table = models.ForeignKey(
         CalibrationTable,

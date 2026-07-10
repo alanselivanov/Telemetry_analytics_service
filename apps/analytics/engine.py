@@ -1,4 +1,3 @@
-"""Fuel analytics engine: interpolation, smoothing, events, and diagnostics."""
 
 from __future__ import annotations
 
@@ -14,7 +13,6 @@ MAX_SENSOR_CODE = 4095
 
 @dataclass(frozen=True)
 class TelemetryPoint:
-    """Raw Omnicomm log point with optional processed fuel values."""
 
     timestamp: int
     speed: float
@@ -25,7 +23,6 @@ class TelemetryPoint:
 
 @dataclass(frozen=True)
 class FuelEvent:
-    """Detected refuel or drain event."""
 
     event_type: str
     started_at: int
@@ -38,7 +35,6 @@ class FuelEvent:
 
 @dataclass(frozen=True)
 class SensorDiagnostic:
-    """Detected fuel sensor health issue."""
 
     sensor_index: int
     status: str
@@ -50,7 +46,6 @@ class SensorDiagnostic:
 
 @dataclass(frozen=True)
 class FuelAnalysisResult:
-    """Full result of one fuel analysis run."""
 
     points: tuple[TelemetryPoint, ...]
     refuels: tuple[FuelEvent, ...]
@@ -60,7 +55,6 @@ class FuelAnalysisResult:
 
 @dataclass(frozen=True)
 class AnalysisConfig:
-    """Tunable thresholds for offline fuel analytics."""
 
     smoothing_window: int = 5
     min_refuel_litres: float = 20.0
@@ -82,7 +76,6 @@ def analyze_fuel_telemetry(
     calibration_grid: CalibrationGrid,
     config: AnalysisConfig | None = None,
 ) -> FuelAnalysisResult:
-    """Run full DУТ analysis for raw Omnicomm click/log rows."""
     settings = config or AnalysisConfig()
     points = convert_points_to_litres(raw_points, calibration_grid)
     smoothed = apply_median_filter(points, window=settings.smoothing_window)
@@ -108,7 +101,6 @@ def convert_points_to_litres(
     raw_points: Sequence[dict],
     calibration_grid: CalibrationGrid,
 ) -> list[TelemetryPoint]:
-    """Convert Omnicomm rows with ``LLS_CODE`` arrays into total fuel litres."""
     points: list[TelemetryPoint] = []
 
     for row in raw_points:
@@ -140,7 +132,6 @@ def convert_points_to_litres(
 def raw_points_for_sensor_diagnostics(
     raw_points: Sequence[dict],
 ) -> list[TelemetryPoint]:
-    """Build code-only telemetry points for sensor health diagnostics."""
     points: list[TelemetryPoint] = []
 
     for row in raw_points:
@@ -165,7 +156,6 @@ def codes_to_litres(
     codes: Sequence[int | None],
     calibration_grid: CalibrationGrid,
 ) -> float | None:
-    """Interpolate each tank and sum litres when every tank is measurable."""
     total = 0.0
 
     for curve in calibration_grid.sensor_curves:
@@ -189,7 +179,6 @@ def _sensor_litres_contribution(code: int | None, curve: SensorCurve) -> float |
 
 
 def interpolate_code_to_litres(code: int, curve: SensorCurve) -> float | None:
-    """Piecewise-linear interpolation of one raw sensor code into litres."""
     if code < MIN_SENSOR_CODE or code > MAX_SENSOR_CODE:
         return None
 
@@ -221,7 +210,6 @@ def apply_median_filter(
     points: Sequence[TelemetryPoint],
     window: int = 5,
 ) -> list[TelemetryPoint]:
-    """Smooth fuel bounce using a median filter."""
     if window <= 1 or not points:
         return [
             TelemetryPoint(
@@ -263,7 +251,6 @@ def detect_refuels(
     points: Sequence[TelemetryPoint],
     config: AnalysisConfig,
 ) -> list[FuelEvent]:
-    """Detect stable fuel growth while the vehicle is stopped."""
     events: list[FuelEvent] = []
     candidate_start: TelemetryPoint | None = None
     previous: TelemetryPoint | None = None
@@ -305,7 +292,6 @@ def detect_drains(
     points: Sequence[TelemetryPoint],
     config: AnalysisConfig,
 ) -> list[FuelEvent]:
-    """Detect sharp drops exceeding plausible engine consumption."""
     events: list[FuelEvent] = []
 
     for previous, point in zip(points, points[1:]):
@@ -337,7 +323,6 @@ def diagnose_sensors(
     *,
     diagnostic_points: Sequence[TelemetryPoint] | None = None,
 ) -> list[SensorDiagnostic]:
-    """Detect frozen, invalid, and chaotic fuel sensor behaviour."""
     code_points = list(diagnostic_points or points)
     diagnostics: list[SensorDiagnostic] = []
     diagnostics.extend(_diagnose_invalid_codes(code_points, calibration_grid))
@@ -381,7 +366,6 @@ def _diagnose_out_of_grid_codes(
     points: Sequence[TelemetryPoint],
     calibration_grid: CalibrationGrid,
 ) -> list[SensorDiagnostic]:
-    """Detect sensor codes that fall outside the calibration grid range."""
     diagnostics: list[SensorDiagnostic] = []
 
     for point in points:
@@ -485,7 +469,6 @@ def _diagnose_intermittent_signal(
     sensor_count: int,
     config: AnalysisConfig,
 ) -> list[SensorDiagnostic]:
-    """Detect alternating valid readings and zeros while the vehicle is stopped."""
     diagnostics: list[SensorDiagnostic] = []
     if not points:
         return diagnostics
@@ -624,7 +607,6 @@ def _merge_sensor_diagnostics(
     diagnostics: Sequence[SensorDiagnostic],
     merge_gap_seconds: int,
 ) -> list[SensorDiagnostic]:
-    """Merge adjacent diagnostics for the same sensor and reason."""
     if not diagnostics:
         return []
 
@@ -673,7 +655,6 @@ def _is_zero_only_reading(
     codes: Sequence[int | None],
     sensor_count: int,
 ) -> bool:
-    """Treat all-zero LLS payloads as missing signal, not an empty tank."""
     for sensor_index in range(sensor_count):
         code = codes[sensor_index] if sensor_index < len(codes) else None
         if code not in (None, 0):

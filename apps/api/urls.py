@@ -1,4 +1,3 @@
-"""API routes for fuel analytics frontend consumers."""
 
 from __future__ import annotations
 

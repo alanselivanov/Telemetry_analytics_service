@@ -1,4 +1,3 @@
-"""Query parameter parsing for REST API time filters."""
 
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ _DATE_ONLY = re.compile(r"^\s*(\d{2})\.(\d{2})\.(\d{4})\s*$")
 
 
 class ApiPeriodParseError(ValueError):
-    """Raised when API period query parameters are invalid."""
+    pass
 
 
 def parse_api_period(
@@ -20,14 +19,6 @@ def parse_api_period(
     date_to: str | None,
     period: str | None,
 ) -> tuple[int, int]:
-    """
-    Resolve ``from``/``to`` or ``period`` query params into unix timestamps.
-
-    Supported forms:
-    - ``from=1778503454&to=1783687454``
-    - ``from=11.05.2026&to=10.07.2026``
-    - ``period=2 months``
-    """
     if period:
         try:
             return parse_time_range(period)

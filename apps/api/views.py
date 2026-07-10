@@ -22,8 +22,6 @@ from .serializers import (
 
 
 class PeriodFilterMixin:
-    """Filter querysets by optional period query parameters."""
-
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)
         terminal_id = self.request.query_params.get("terminal_id")
@@ -62,18 +60,12 @@ class PeriodFilterMixin:
         return queryset
 
 
-class TerminalFilterMixin(PeriodFilterMixin):
-    """Backward-compatible alias for list endpoints."""
-
-
 class VehicleListView(ListAPIView):
     queryset = Vehicle.objects.all()
     serializer_class = VehicleSerializer
 
 
 class VehicleReportView(APIView):
-    """Return persisted analytics for one vehicle and period as JSON."""
-
     def get(self, request, vehicle_id: int):
         try:
             date_from, date_to = parse_api_period(
@@ -111,21 +103,21 @@ class VehicleReportView(APIView):
         return Response(payload)
 
 
-class AnalysisRunListView(TerminalFilterMixin, ListAPIView):
+class AnalysisRunListView(PeriodFilterMixin, ListAPIView):
     queryset = AnalysisRun.objects.select_related("vehicle", "calibration_table")
     serializer_class = AnalysisRunSerializer
 
 
-class FuelEventListView(TerminalFilterMixin, ListAPIView):
+class FuelEventListView(PeriodFilterMixin, ListAPIView):
     queryset = FuelEvent.objects.select_related("vehicle", "analysis_run")
     serializer_class = FuelEventSerializer
 
 
-class SensorFaultListView(TerminalFilterMixin, ListAPIView):
+class SensorFaultListView(PeriodFilterMixin, ListAPIView):
     queryset = SensorFault.objects.select_related("vehicle", "analysis_run")
     serializer_class = SensorFaultSerializer
 
 
-class TelemetryLogPointListView(TerminalFilterMixin, ListAPIView):
+class TelemetryLogPointListView(PeriodFilterMixin, ListAPIView):
     queryset = TelemetryLogPoint.objects.select_related("vehicle", "analysis_run")
     serializer_class = TelemetryLogPointSerializer

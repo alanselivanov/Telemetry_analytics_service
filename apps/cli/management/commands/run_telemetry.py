@@ -29,7 +29,7 @@ from omnicomm.session import set_active_client, set_session_vehicles
 
 BANNER = """
 ============================================================
-       Telemetry Analytics Service — интерактивный режим
+       Telemetry Analytics Service
 ============================================================
 """
 
@@ -149,7 +149,7 @@ class Command(BaseCommand):
         while True:
             raw = input(
                 "Выберите ТС (номер, terminal_id, имя или несколько через запятую, "
-                "например: 5,12,33): "
+                "например: 18,31): "
             ).strip()
             if not raw:
                 self.stderr.write(self.style.WARNING("Введите номер, ID или имя ТС.\n"))

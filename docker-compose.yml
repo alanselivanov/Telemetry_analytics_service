@@ -13,6 +13,35 @@ services:
       - "5433:5432"
     volumes:
       - telemetry_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DATABASE_USER:-postgres} -d ${DATABASE_NAME:-telemetry_analytics_service}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  app:
+    build: .
+    container_name: telemetry_analytics_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_ENGINE: django.db.backends.postgresql
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      ALLOWED_HOSTS: localhost,127.0.0.1,0.0.0.0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./calibrations:/app/calibrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   telemetry_pg_data:

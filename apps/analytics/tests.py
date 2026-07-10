@@ -55,11 +55,12 @@ class FuelAnalyticsTests(SimpleTestCase):
     def setUp(self):
         self.grid = parse_calibration_text(
             "0;0;0\n"
-            "100;500;500\n"
-            "200;1000;1000\n"
-            "300;1500;1500\n"
-            "400;2000;2000\n"
-            "500;2500;2500\n"
+            "500;50;50\n"
+            "1000;100;100\n"
+            "1500;150;150\n"
+            "2000;200;200\n"
+            "2500;250;250\n"
+            "3000;300;300\n"
         )
 
     def test_interpolates_and_sums_two_sensors(self):
@@ -179,11 +180,52 @@ class FuelAnalyticsTests(SimpleTestCase):
 
     def test_skips_rows_without_active_sensor_reading(self):
         result = analyze_fuel_telemetry(
-            [{"EVENT_DATE": 1_700_000_000, "SPEED": 0, "LLS_CODE": [0, 0]}],
+            [{"EVENT_DATE": 1_700_000_000, "SPEED": 0, "LLS_CODE": [1000, None]}],
             self.grid,
         )
 
         self.assertEqual(len(result.points), 0)
+
+    def test_skips_rows_when_one_sensor_is_outside_calibration_grid(self):
+        result = analyze_fuel_telemetry(
+            [{"EVENT_DATE": 1_700_000_000, "SPEED": 0, "LLS_CODE": [1000, 3500]}],
+            self.grid,
+        )
+
+        self.assertEqual(len(result.points), 0)
+
+    def test_counts_zero_codes_as_empty_tanks(self):
+        litres = codes_to_litres([0, 0], self.grid)
+
+        self.assertEqual(litres, 0.0)
+
+    def test_skips_zero_only_rows_in_timeline(self):
+        result = analyze_fuel_telemetry(
+            [
+                {"EVENT_DATE": 1_700_000_000, "SPEED": 0, "LLS_CODE": [0, 0]},
+                {"EVENT_DATE": 1_700_000_600, "SPEED": 0, "LLS_CODE": [1000, 1000]},
+                {"EVENT_DATE": 1_700_001_200, "SPEED": 0, "LLS_CODE": [0, 0]},
+            ],
+            self.grid,
+        )
+
+        self.assertEqual(len(result.points), 1)
+
+    def test_balance_uses_first_and_last_nonzero_levels(self):
+        result = analyze_fuel_telemetry(
+            [
+                {"EVENT_DATE": 1_700_000_000, "SPEED": 0, "LLS_CODE": [0, 0]},
+                {"EVENT_DATE": 1_700_000_600, "SPEED": 0, "LLS_CODE": [1000, 1000]},
+                {"EVENT_DATE": 1_700_001_200, "SPEED": 0, "LLS_CODE": [900, 900]},
+                {"EVENT_DATE": 1_700_001_800, "SPEED": 0, "LLS_CODE": [0, 0]},
+            ],
+            self.grid,
+        )
+        balance = calculate_fuel_balance(result)
+
+        self.assertGreater(balance.start_litres, 0)
+        self.assertGreater(balance.end_litres, 0)
+        self.assertEqual(balance.meaningful_points_count, 2)
 
     def test_intermittent_signal_not_reported_as_jitter(self):
         points = []
@@ -211,6 +253,23 @@ class FuelAnalyticsTests(SimpleTestCase):
 
         self.assertIn("Пропадание сигнала ДУТ", sensor_2_reasons)
         self.assertNotIn("Хаотичный дребезг на стоянке", sensor_2_reasons)
+
+    def test_diagnoses_code_outside_calibration_grid(self):
+        points = []
+        start = 1_700_000_000
+        for index in range(3):
+            points.append(
+                {
+                    "EVENT_DATE": start + index * 60,
+                    "SPEED": 0,
+                    "LLS_CODE": [3500, 1000],
+                }
+            )
+
+        result = analyze_fuel_telemetry(points, self.grid)
+        reasons = {item.reason for item in result.diagnostics}
+
+        self.assertIn("Код ДУТ вне тарировочной сетки", reasons)
 
     def test_dedupe_click_log_rows(self):
         rows = _dedupe_click_log_rows(
@@ -337,13 +396,13 @@ class FetchClickLogChunksTests(SimpleTestCase):
         self.assertEqual(rows, [])
 
     def test_loads_real_calibration_file_from_project_root(self):
-        calibration_path = Path(__file__).resolve().parents[3] / "тарировка.txt"
+        calibration_path = Path(__file__).resolve().parents[2] / "тарировка_пример.txt"
         if not calibration_path.exists():
-            self.skipTest("тарировка.txt is not available in the workspace root.")
+            self.skipTest("тарировка_пример.txt is not available in the project root.")
 
         grid = parse_calibration_text(calibration_path.read_text(encoding="utf-8"))
-        litres = codes_to_litres([639, 798], grid)
+        litres = codes_to_litres([400, 400], grid)
 
         self.assertEqual(grid.sensor_count, 2)
         self.assertEqual(len(grid.rows), 23)
-        self.assertAlmostEqual(litres, 400.0, places=1)
+        self.assertAlmostEqual(litres, 1437.0, places=1)

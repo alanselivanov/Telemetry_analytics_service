@@ -125,12 +125,17 @@ class Command(BaseCommand):
                     continue
 
                 for execution in executions:
+                    vehicle_name = execution.analysis_run.vehicle.name
+                    self._print_execution_header(execution, vehicle_name)
+                    if execution.raw_rows_count == 0:
+                        self._print_empty_data_warning(execution.analysis_run.vehicle)
+
                     if action == 1:
-                        self._print_diagnostics_report(execution)
+                        self._print_diagnostics_report(execution, vehicle_name)
                     elif action == 2:
-                        self._print_fuel_events_report(execution)
+                        self._print_fuel_events_report(execution, vehicle_name)
                     elif action == 3:
-                        self._print_balance_report(execution)
+                        self._print_balance_report(execution, vehicle_name)
 
                     self.stdout.write(
                         self.style.SUCCESS(
@@ -448,9 +453,6 @@ class Command(BaseCommand):
                 fetch_progress_callback=fetch_progress,
                 analyze_progress_callback=analyze_progress,
             )
-            self._print_execution_header(execution, target.vehicle.name)
-            if execution.raw_rows_count == 0:
-                self._print_empty_data_warning(target.vehicle)
             return [execution]
 
         executions = run_multi_vehicle_fuel_analysis(
@@ -461,10 +463,6 @@ class Command(BaseCommand):
             fetch_progress_callback=fetch_progress,
             analyze_progress_callback=analyze_progress,
         )
-        for execution in executions:
-            self._print_execution_header(execution, execution.analysis_run.vehicle.name)
-            if execution.raw_rows_count == 0:
-                self._print_empty_data_warning(execution.analysis_run.vehicle)
         return executions
 
     def _print_empty_data_warning(self, vehicle: Vehicle) -> None:
@@ -489,8 +487,13 @@ class Command(BaseCommand):
             f"  Потоков CPU      : {execution.cpu_workers}\n"
         )
 
-    def _print_diagnostics_report(self, execution: FuelAnalysisExecution) -> None:
-        self.stdout.write(self.style.MIGRATE_HEADING("--- Диагностика ДУТ ---"))
+    def _print_diagnostics_report(
+        self,
+        execution: FuelAnalysisExecution,
+        vehicle_name: str | None = None,
+    ) -> None:
+        title = vehicle_name or execution.analysis_run.vehicle.name
+        self.stdout.write(self.style.MIGRATE_HEADING(f"--- Диагностика ДУТ: {title} ---"))
         if execution.raw_rows_count == 0:
             self.stdout.write("Нет данных для диагностики.\n")
             return
@@ -528,8 +531,13 @@ class Command(BaseCommand):
             )
         self.stdout.write("")
 
-    def _print_fuel_events_report(self, execution: FuelAnalysisExecution) -> None:
-        self.stdout.write(self.style.MIGRATE_HEADING("--- Топливный аудит ---"))
+    def _print_fuel_events_report(
+        self,
+        execution: FuelAnalysisExecution,
+        vehicle_name: str | None = None,
+    ) -> None:
+        title = vehicle_name or execution.analysis_run.vehicle.name
+        self.stdout.write(self.style.MIGRATE_HEADING(f"--- Топливный аудит: {title} ---"))
         if execution.raw_rows_count == 0:
             self.stdout.write(
                 "Нет данных для анализа — события не обнаружены.\n"
@@ -538,6 +546,12 @@ class Command(BaseCommand):
 
         refuels = execution.result.refuels
         drains = execution.result.drains
+
+        if not refuels and not drains and execution.result.points:
+            self.stdout.write(
+                "События не обнаружены. Проверьте тарировку, диапазон кодов ДУТ "
+                "и исправность датчиков.\n"
+            )
 
         self.stdout.write(f"Заправки: {len(refuels)}")
         for event in refuels:
@@ -554,10 +568,15 @@ class Command(BaseCommand):
             )
         self.stdout.write("")
 
-    def _print_balance_report(self, execution: FuelAnalysisExecution) -> None:
+    def _print_balance_report(
+        self,
+        execution: FuelAnalysisExecution,
+        vehicle_name: str | None = None,
+    ) -> None:
         balance = execution.balance
+        title = vehicle_name or execution.analysis_run.vehicle.name
         self.stdout.write(
-            self.style.MIGRATE_HEADING("--- Баланс топлива и расход ---")
+            self.style.MIGRATE_HEADING(f"--- Баланс топлива и расход: {title} ---")
         )
         self.stdout.write(
             f"  Начальный уровень       : {balance.start_litres:.1f} л\n"
@@ -567,6 +586,27 @@ class Command(BaseCommand):
             f"  Слито                   : {balance.drained_litres:.1f} л\n"
             f"  Оценочный расход        : {balance.estimated_consumption_litres:.1f} л\n"
         )
+        if balance.total_points_count:
+            self.stdout.write(
+                f"  Ненулевых измерений     : "
+                f"{balance.meaningful_points_count} из {balance.total_points_count}\n"
+            )
+        if balance.unreliable:
+            self.stdout.write(
+                self.style.WARNING(
+                    "  Внимание: ненулевых показаний уровня не найдено. "
+                    "Проверьте тарировку и диагностику ДУТ.\n"
+                )
+            )
+        elif (
+            balance.refueled_litres > 0 or balance.drained_litres > 0
+        ) and balance.start_litres <= 0 and balance.end_litres <= 0:
+            self.stdout.write(
+                self.style.WARNING(
+                    "  Внимание: события есть, но уровень на границах периода нулевой. "
+                    "Баланс может быть неточным.\n"
+                )
+            )
 
     def _print_full_report(self, execution: FuelAnalysisExecution, title: str) -> None:
         self._print_execution_header(execution, title)

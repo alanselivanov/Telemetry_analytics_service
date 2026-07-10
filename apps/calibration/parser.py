@@ -22,10 +22,10 @@ class CalibrationParseError(ValueError):
 
 @dataclass(frozen=True)
 class CalibrationRow:
-    """One parsed calibration row."""
+    """One parsed calibration row: sensor code and litres per tank."""
 
-    litres: Decimal
-    sensor_codes: tuple[int, ...]
+    sensor_code: int
+    tank_litres: tuple[float, ...]
     row_number: int
 
 
@@ -50,9 +50,14 @@ class CalibrationGrid:
 
 
 def parse_calibration_text(text: str) -> CalibrationGrid:
-    """Parse semicolon-separated calibration content into an interpolation grid."""
+    """
+    Parse semicolon-separated calibration content into an interpolation grid.
+
+    Format per TZ:
+    column 1 = sensor code (0-4095), columns 2..N = litres for each tank.
+    """
     rows: list[CalibrationRow] = []
-    expected_sensor_count: int | None = None
+    expected_tank_count: int | None = None
 
     for row_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -62,35 +67,29 @@ def parse_calibration_text(text: str) -> CalibrationGrid:
         parts = [part.strip() for part in line.split(";")]
         if len(parts) < 2:
             raise CalibrationParseError(
-                f"Line {row_number}: expected litres and at least one sensor code."
+                f"Line {row_number}: expected sensor code and at least one tank litres value."
             )
 
-        try:
-            litres = Decimal(parts[0].replace(",", "."))
-        except InvalidOperation as exc:
-            raise CalibrationParseError(
-                f"Line {row_number}: invalid litres value {parts[0]!r}."
-            ) from exc
+        sensor_code = _parse_sensor_code(parts[0], row_number)
+        tank_litres = tuple(_parse_tank_litres(value, row_number) for value in parts[1:])
 
-        sensor_codes = tuple(_parse_sensor_code(value, row_number) for value in parts[1:])
-
-        if len(sensor_codes) > MAX_SENSOR_COUNT:
+        if len(tank_litres) > MAX_SENSOR_COUNT:
             raise CalibrationParseError(
-                f"Line {row_number}: expected at most {MAX_SENSOR_COUNT} sensors."
+                f"Line {row_number}: expected at most {MAX_SENSOR_COUNT} tanks."
             )
 
-        if expected_sensor_count is None:
-            expected_sensor_count = len(sensor_codes)
-        elif len(sensor_codes) != expected_sensor_count:
+        if expected_tank_count is None:
+            expected_tank_count = len(tank_litres)
+        elif len(tank_litres) != expected_tank_count:
             raise CalibrationParseError(
-                f"Line {row_number}: expected {expected_sensor_count} sensor codes, "
-                f"got {len(sensor_codes)}."
+                f"Line {row_number}: expected {expected_tank_count} tank values, "
+                f"got {len(tank_litres)}."
             )
 
         rows.append(
             CalibrationRow(
-                litres=litres,
-                sensor_codes=sensor_codes,
+                sensor_code=sensor_code,
+                tank_litres=tank_litres,
                 row_number=row_number,
             )
         )
@@ -98,7 +97,7 @@ def parse_calibration_text(text: str) -> CalibrationGrid:
     if len(rows) < 2:
         raise CalibrationParseError("Calibration table must contain at least two rows.")
 
-    rows.sort(key=lambda row: row.litres)
+    rows.sort(key=lambda row: row.sensor_code)
     return build_calibration_grid(rows)
 
 
@@ -109,33 +108,22 @@ def parse_calibration_file(path: str | Path, encoding: str = "utf-8-sig") -> Cal
 
 
 def build_calibration_grid(rows: Iterable[CalibrationRow]) -> CalibrationGrid:
-    """
-    Build per-sensor interpolation curves.
-
-    The file stores total litres in column 1. For multi-sensor vehicles we split
-    each row's total litres evenly across active sensors, then sum per-sensor
-    interpolated values during analytics.
-    """
-    sorted_rows = tuple(sorted(rows, key=lambda row: row.litres))
+    """Build per-sensor interpolation curves from code -> litres mapping."""
+    sorted_rows = tuple(sorted(rows, key=lambda row: row.sensor_code))
     if not sorted_rows:
         raise CalibrationParseError("Calibration rows cannot be empty.")
 
-    sensor_count = len(sorted_rows[0].sensor_codes)
-    per_sensor_points: list[list[tuple[int, float]]] = [[] for _ in range(sensor_count)]
+    tank_count = len(sorted_rows[0].tank_litres)
+    per_sensor_points: list[list[tuple[int, float]]] = [[] for _ in range(tank_count)]
 
     for row in sorted_rows:
-        active_count = max(1, sum(1 for code in row.sensor_codes if code > 0))
-        litres_share = float(row.litres) / active_count
-
-        for sensor_index, code in enumerate(row.sensor_codes):
-            if code <= 0 and float(row.litres) > 0:
-                continue
-            per_sensor_points[sensor_index].append((code, litres_share))
+        for sensor_index, litres in enumerate(row.tank_litres):
+            per_sensor_points[sensor_index].append((row.sensor_code, litres))
 
     curves = tuple(
         SensorCurve(
             sensor_index=index,
-            points=tuple(sorted(set(points), key=lambda point: point[0])),
+            points=_dedupe_curve_points(points),
         )
         for index, points in enumerate(per_sensor_points)
     )
@@ -144,15 +132,34 @@ def build_calibration_grid(rows: Iterable[CalibrationRow]) -> CalibrationGrid:
 
 def grid_from_model(table: CalibrationTable) -> CalibrationGrid:
     """Build an interpolation grid from a persisted calibration table."""
+    if table.raw_rows:
+        rows = tuple(_calibration_row_from_raw(raw_row) for raw_row in table.raw_rows)
+        return build_calibration_grid(rows)
+
     rows = (
         CalibrationRow(
-            litres=point.litres,
-            sensor_codes=tuple(int(code) for code in point.sensor_codes),
+            sensor_code=int(point.litres),
+            tank_litres=tuple(float(value) for value in point.sensor_codes),
             row_number=point.row_number,
         )
         for point in table.points.all()
     )
     return build_calibration_grid(rows)
+
+
+def _calibration_row_from_raw(raw_row: dict) -> CalibrationRow:
+    if "sensor_code" in raw_row:
+        return CalibrationRow(
+            sensor_code=int(raw_row["sensor_code"]),
+            tank_litres=tuple(float(value) for value in raw_row["tank_litres"]),
+            row_number=int(raw_row["row_number"]),
+        )
+
+    return CalibrationRow(
+        sensor_code=int(raw_row["litres"]),
+        tank_litres=tuple(float(value) for value in raw_row["sensor_codes"]),
+        row_number=int(raw_row["row_number"]),
+    )
 
 
 @transaction.atomic
@@ -177,8 +184,8 @@ def save_calibration_grid(
         source_filename=source_filename,
         raw_rows=[
             {
-                "litres": str(row.litres),
-                "sensor_codes": list(row.sensor_codes),
+                "sensor_code": row.sensor_code,
+                "tank_litres": list(row.tank_litres),
                 "row_number": row.row_number,
             }
             for row in grid.rows
@@ -190,14 +197,21 @@ def save_calibration_grid(
         [
             CalibrationPoint(
                 table=table,
-                litres=row.litres,
-                sensor_codes=list(row.sensor_codes),
+                litres=row.sensor_code,
+                sensor_codes=list(row.tank_litres),
                 row_number=row.row_number,
             )
             for row in grid.rows
         ]
     )
     return table
+
+
+def _dedupe_curve_points(points: list[tuple[int, float]]) -> tuple[tuple[int, float], ...]:
+    by_code: dict[int, float] = {}
+    for code, litres in sorted(points, key=lambda item: item[0]):
+        by_code[code] = litres
+    return tuple((code, by_code[code]) for code in sorted(by_code))
 
 
 def _parse_sensor_code(value: str, row_number: int) -> int:
@@ -214,3 +228,12 @@ def _parse_sensor_code(value: str, row_number: int) -> int:
         )
 
     return code
+
+
+def _parse_tank_litres(value: str, row_number: int) -> float:
+    try:
+        return float(Decimal(value.replace(",", ".")))
+    except InvalidOperation as exc:
+        raise CalibrationParseError(
+            f"Line {row_number}: invalid tank litres value {value!r}."
+        ) from exc

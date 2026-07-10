@@ -48,11 +48,12 @@ class ParallelAnalyzeTests(SimpleTestCase):
     def setUp(self):
         self.grid = parse_calibration_text(
             "0;0;0\n"
-            "100;500;500\n"
-            "200;1000;1000\n"
-            "300;1500;1500\n"
-            "400;2000;2000\n"
-            "500;2500;2500\n"
+            "500;50;50\n"
+            "1000;100;100\n"
+            "1500;150;150\n"
+            "2000;200;200\n"
+            "2500;250;250\n"
+            "3000;300;300\n"
         )
 
     def _build_rows(self, count: int) -> list[dict]:

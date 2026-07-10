@@ -131,25 +131,54 @@ def _calculate_balance_from_queryset(
     refuels: tuple[FuelEvent, ...],
     drains: tuple[FuelEvent, ...],
 ) -> "FuelBalance":
-    from analytics.services import FuelBalance
+    from analytics.services import MIN_MEANINGFUL_LEVEL_LITRES, FuelBalance
 
     refueled = sum(event.volume_litres for event in refuels)
     drained = sum(event.volume_litres for event in drains)
 
     first = (
-        points_queryset.filter(smoothed_litres__isnull=False)
+        points_queryset.filter(smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES)
         .values_list("smoothed_litres", flat=True)
         .first()
     )
     last = (
-        points_queryset.filter(smoothed_litres__isnull=False)
+        points_queryset.filter(smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES)
         .order_by("-event_date")
         .values_list("smoothed_litres", flat=True)
         .first()
     )
+    total_points = points_queryset.filter(smoothed_litres__isnull=False).count()
+    meaningful_points = points_queryset.filter(
+        smoothed_litres__gt=MIN_MEANINGFUL_LEVEL_LITRES
+    ).count()
 
     if first is None or last is None:
-        return FuelBalance(0, 0, 0, round(refueled, 3), round(drained, 3), 0)
+        first = (
+            points_queryset.filter(smoothed_litres__isnull=False)
+            .values_list("smoothed_litres", flat=True)
+            .first()
+        )
+        last = (
+            points_queryset.filter(smoothed_litres__isnull=False)
+            .order_by("-event_date")
+            .values_list("smoothed_litres", flat=True)
+            .first()
+        )
+        if first is None or last is None:
+            return FuelBalance(0, 0, 0, round(refueled, 3), round(drained, 3), 0)
+        start = float(first)
+        end = float(last)
+        return FuelBalance(
+            start_litres=round(start, 3),
+            end_litres=round(end, 3),
+            delta_litres=round(end - start, 3),
+            refueled_litres=round(refueled, 3),
+            drained_litres=round(drained, 3),
+            estimated_consumption_litres=round(max(0.0, start + refueled - drained - end), 3),
+            meaningful_points_count=meaningful_points,
+            total_points_count=total_points,
+            unreliable=True,
+        )
 
     start = float(first)
     end = float(last)
@@ -163,6 +192,9 @@ def _calculate_balance_from_queryset(
         refueled_litres=round(refueled, 3),
         drained_litres=round(drained, 3),
         estimated_consumption_litres=round(consumption, 3),
+        meaningful_points_count=meaningful_points,
+        total_points_count=total_points,
+        unreliable=False,
     )
 
 

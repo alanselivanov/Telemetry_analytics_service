@@ -19,6 +19,7 @@ from .engine import (
     detect_drains,
     detect_refuels,
     diagnose_sensors,
+    raw_points_for_sensor_diagnostics,
 )
 
 ProgressCallback = Callable[..., None]
@@ -129,7 +130,12 @@ def analyze_fuel_telemetry_parallel(
 
     refuels = detect_refuels(smoothed, settings)
     drains = detect_drains(smoothed, settings)
-    diagnostics = diagnose_sensors(smoothed, calibration_grid, settings)
+    diagnostics = diagnose_sensors(
+        smoothed,
+        calibration_grid,
+        settings,
+        diagnostic_points=raw_points_for_sensor_diagnostics(rows),
+    )
 
     if progress_callback:
         progress_callback("done", len(smoothed), len(refuels), len(drains), len(diagnostics))

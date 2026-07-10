@@ -101,6 +101,9 @@ class FuelBalanceSerializer(serializers.Serializer):
     refueled_litres = serializers.FloatField()
     drained_litres = serializers.FloatField()
     estimated_consumption_litres = serializers.FloatField()
+    meaningful_points_count = serializers.IntegerField(required=False)
+    total_points_count = serializers.IntegerField(required=False)
+    unreliable = serializers.BooleanField(required=False)
 
     @classmethod
     def from_balance(cls, balance: FuelBalance) -> "FuelBalanceSerializer":

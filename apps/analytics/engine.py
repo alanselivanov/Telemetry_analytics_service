@@ -88,7 +88,13 @@ def analyze_fuel_telemetry(
     smoothed = apply_median_filter(points, window=settings.smoothing_window)
     refuels = detect_refuels(smoothed, settings)
     drains = detect_drains(smoothed, settings)
-    diagnostics = diagnose_sensors(smoothed, calibration_grid, settings)
+    diagnostic_points = raw_points_for_sensor_diagnostics(raw_points)
+    diagnostics = diagnose_sensors(
+        smoothed,
+        calibration_grid,
+        settings,
+        diagnostic_points=diagnostic_points,
+    )
 
     return FuelAnalysisResult(
         points=tuple(smoothed),
@@ -109,12 +115,13 @@ def convert_points_to_litres(
         raw_codes = row.get("LLS_CODE") or []
         codes = tuple(_normalize_code(value) for value in raw_codes)
         litres = codes_to_litres(codes, calibration_grid)
+        if litres is None:
+            continue
+        if litres == 0.0 and _is_zero_only_reading(codes, calibration_grid.sensor_count):
+            continue
 
         timestamp = row.get("EVENT_DATE") or row.get("TIME")
         if timestamp is None:
-            continue
-
-        if not _has_active_sensor_reading(codes, calibration_grid.sensor_count):
             continue
 
         points.append(
@@ -130,34 +137,74 @@ def convert_points_to_litres(
     return points
 
 
+def raw_points_for_sensor_diagnostics(
+    raw_points: Sequence[dict],
+) -> list[TelemetryPoint]:
+    """Build code-only telemetry points for sensor health diagnostics."""
+    points: list[TelemetryPoint] = []
+
+    for row in raw_points:
+        timestamp = row.get("EVENT_DATE") or row.get("TIME")
+        if timestamp is None:
+            continue
+
+        raw_codes = row.get("LLS_CODE") or []
+        points.append(
+            TelemetryPoint(
+                timestamp=int(timestamp),
+                speed=float(row.get("SPEED") or 0),
+                lls_codes=tuple(_normalize_code(value) for value in raw_codes),
+            )
+        )
+
+    points.sort(key=lambda point: point.timestamp)
+    return points
+
+
 def codes_to_litres(
     codes: Sequence[int | None],
     calibration_grid: CalibrationGrid,
-) -> float:
-    """Interpolate each active sensor and sum its litres contribution."""
+) -> float | None:
+    """Interpolate each tank and sum litres when every tank is measurable."""
     total = 0.0
 
     for curve in calibration_grid.sensor_curves:
         code = codes[curve.sensor_index] if curve.sensor_index < len(codes) else None
-        if code is None or code <= 0:
-            continue
-        total += interpolate_code_to_litres(code, curve)
+        contribution = _sensor_litres_contribution(code, curve)
+        if contribution is None:
+            return None
+        total += contribution
 
     return total
 
 
-def interpolate_code_to_litres(code: int, curve: SensorCurve) -> float:
+def _sensor_litres_contribution(code: int | None, curve: SensorCurve) -> float | None:
+    if code is None:
+        return None
+    if code == 0:
+        return 0.0
+    if code < MIN_SENSOR_CODE or code > MAX_SENSOR_CODE:
+        return None
+    return interpolate_code_to_litres(code, curve)
+
+
+def interpolate_code_to_litres(code: int, curve: SensorCurve) -> float | None:
     """Piecewise-linear interpolation of one raw sensor code into litres."""
     if code < MIN_SENSOR_CODE or code > MAX_SENSOR_CODE:
-        raise ValueError(f"Sensor code {code} is outside 0-4095.")
+        return None
 
     points = curve.points
     if not points:
-        return 0.0
+        return None
 
-    if code <= points[0][0]:
+    min_code = points[0][0]
+    max_code = points[-1][0]
+    if code < min_code or code > max_code:
+        return None
+
+    if code == min_code:
         return points[0][1]
-    if code >= points[-1][0]:
+    if code == max_code:
         return points[-1][1]
 
     for (left_code, left_litres), (right_code, right_litres) in zip(points, points[1:]):
@@ -167,7 +214,7 @@ def interpolate_code_to_litres(code: int, curve: SensorCurve) -> float:
             ratio = (code - left_code) / (right_code - left_code)
             return left_litres + ratio * (right_litres - left_litres)
 
-    return points[-1][1]
+    return None
 
 
 def apply_median_filter(
@@ -274,7 +321,11 @@ def detect_drains(
         actual_drop = abs(delta)
 
         if actual_drop >= config.min_drain_litres and actual_drop > allowed_drop:
-            events.append(_build_event("DRAIN", previous, point, actual_drop))
+            net_drop = (previous.smoothed_litres or 0) - (point.smoothed_litres or 0)
+            if net_drop >= config.min_drain_litres:
+                events.append(
+                    _build_event("DRAIN", previous, point, net_drop)
+                )
 
     return _merge_adjacent_events(events, "DRAIN")
 
@@ -283,10 +334,14 @@ def diagnose_sensors(
     points: Sequence[TelemetryPoint],
     calibration_grid: CalibrationGrid,
     config: AnalysisConfig,
+    *,
+    diagnostic_points: Sequence[TelemetryPoint] | None = None,
 ) -> list[SensorDiagnostic]:
     """Detect frozen, invalid, and chaotic fuel sensor behaviour."""
+    code_points = list(diagnostic_points or points)
     diagnostics: list[SensorDiagnostic] = []
-    diagnostics.extend(_diagnose_invalid_codes(points, calibration_grid))
+    diagnostics.extend(_diagnose_invalid_codes(code_points, calibration_grid))
+    diagnostics.extend(_diagnose_out_of_grid_codes(code_points, calibration_grid))
     diagnostics.extend(_diagnose_long_freeze(points, calibration_grid.sensor_count, config))
     diagnostics.extend(_diagnose_intermittent_signal(points, calibration_grid.sensor_count, config))
     diagnostics.extend(_diagnose_stationary_jitter(points, calibration_grid.sensor_count, config))
@@ -316,6 +371,60 @@ def _diagnose_invalid_codes(
                         started_at=point.timestamp,
                         ended_at=point.timestamp,
                         details={"code": code},
+                    )
+                )
+
+    return diagnostics
+
+
+def _diagnose_out_of_grid_codes(
+    points: Sequence[TelemetryPoint],
+    calibration_grid: CalibrationGrid,
+) -> list[SensorDiagnostic]:
+    """Detect sensor codes that fall outside the calibration grid range."""
+    diagnostics: list[SensorDiagnostic] = []
+
+    for point in points:
+        for curve in calibration_grid.sensor_curves:
+            code = (
+                point.lls_codes[curve.sensor_index]
+                if curve.sensor_index < len(point.lls_codes)
+                else None
+            )
+            if code is None or code <= 0:
+                continue
+            if code < MIN_SENSOR_CODE or code > MAX_SENSOR_CODE:
+                continue
+
+            curve_points = curve.points
+            if not curve_points:
+                diagnostics.append(
+                    SensorDiagnostic(
+                        sensor_index=curve.sensor_index,
+                        status="Датчик не в порядке / Требуется диагностика",
+                        reason="Код ДУТ вне тарировочной сетки",
+                        started_at=point.timestamp,
+                        ended_at=point.timestamp,
+                        details={"code": code},
+                    )
+                )
+                continue
+
+            min_code = curve_points[0][0]
+            max_code = curve_points[-1][0]
+            if code < min_code or code > max_code:
+                diagnostics.append(
+                    SensorDiagnostic(
+                        sensor_index=curve.sensor_index,
+                        status="Датчик не в порядке / Требуется диагностика",
+                        reason="Код ДУТ вне тарировочной сетки",
+                        started_at=point.timestamp,
+                        ended_at=point.timestamp,
+                        details={
+                            "code": code,
+                            "grid_min_code": min_code,
+                            "grid_max_code": max_code,
+                        },
                     )
                 )
 
@@ -492,11 +601,15 @@ def _merge_adjacent_events(events: Sequence[FuelEvent], event_type: str) -> list
     for event in events[1:]:
         previous = merged[-1]
         if event.started_at - previous.ended_at <= 10 * 60:
+            net_volume = max(
+                0.0,
+                previous.start_level_litres - event.end_level_litres,
+            )
             merged[-1] = FuelEvent(
                 event_type=event_type,
                 started_at=previous.started_at,
                 ended_at=event.ended_at,
-                volume_litres=round(previous.volume_litres + event.volume_litres, 3),
+                volume_litres=round(net_volume, 3),
                 start_level_litres=previous.start_level_litres,
                 end_level_litres=event.end_level_litres,
                 confidence=min(previous.confidence, event.confidence),
@@ -556,15 +669,16 @@ def _sensor_codes_from_window(
     ]
 
 
-def _has_active_sensor_reading(
+def _is_zero_only_reading(
     codes: Sequence[int | None],
     sensor_count: int,
 ) -> bool:
+    """Treat all-zero LLS payloads as missing signal, not an empty tank."""
     for sensor_index in range(sensor_count):
         code = codes[sensor_index] if sensor_index < len(codes) else None
-        if _is_valid_sensor_code(code):
-            return True
-    return False
+        if code not in (None, 0):
+            return False
+    return True
 
 
 def _is_valid_sensor_code(code: int | None) -> bool:

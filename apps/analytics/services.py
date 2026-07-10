@@ -30,6 +30,8 @@ ProgressCallback = Callable[..., None]
 FetchProgressCallback = Callable[..., None]
 AnalyzeProgressCallback = Callable[..., None]
 
+MIN_MEANINGFUL_LEVEL_LITRES = 0.5
+
 
 @dataclass(frozen=True)
 class FuelBalance:
@@ -41,6 +43,9 @@ class FuelBalance:
     refueled_litres: float
     drained_litres: float
     estimated_consumption_litres: float
+    meaningful_points_count: int = 0
+    total_points_count: int = 0
+    unreliable: bool = False
 
 
 @dataclass(frozen=True)
@@ -371,13 +376,13 @@ def run_mock_fuel_analysis(*, source: str = "run_telemetry_mock") -> FuelAnalysi
 def calculate_fuel_balance(result: FuelAnalysisResult) -> FuelBalance:
     """Calculate basic balance and estimated consumption from processed points."""
     valid_points = [point for point in result.points if point.smoothed_litres is not None]
-    if not valid_points:
-        return FuelBalance(0, 0, 0, 0, 0, 0)
-
-    start = float(valid_points[0].smoothed_litres or 0)
-    end = float(valid_points[-1].smoothed_litres or 0)
     refueled = sum(event.volume_litres for event in result.refuels)
     drained = sum(event.volume_litres for event in result.drains)
+
+    if not valid_points:
+        return FuelBalance(0, 0, 0, round(refueled, 3), round(drained, 3), 0)
+
+    start, end, meaningful_count, unreliable = _resolve_boundary_levels(valid_points)
     delta = end - start
     consumption = max(0.0, start + refueled - drained - end)
 
@@ -388,7 +393,38 @@ def calculate_fuel_balance(result: FuelAnalysisResult) -> FuelBalance:
         refueled_litres=round(refueled, 3),
         drained_litres=round(drained, 3),
         estimated_consumption_litres=round(consumption, 3),
+        meaningful_points_count=meaningful_count,
+        total_points_count=len(valid_points),
+        unreliable=unreliable,
     )
+
+
+def _resolve_boundary_levels(
+    valid_points: list,
+) -> tuple[float, float, int, bool]:
+    """
+    Pick start/end levels from the first and last meaningful readings.
+
+    Leading and trailing points with code 0 / no signal often report 0.0 L
+    even when the tank had fuel later in the period.
+    """
+    meaningful = [
+        point
+        for point in valid_points
+        if (point.smoothed_litres or 0) > MIN_MEANINGFUL_LEVEL_LITRES
+    ]
+
+    if meaningful:
+        return (
+            float(meaningful[0].smoothed_litres or 0),
+            float(meaningful[-1].smoothed_litres or 0),
+            len(meaningful),
+            False,
+        )
+
+    start = float(valid_points[0].smoothed_litres or 0)
+    end = float(valid_points[-1].smoothed_litres or 0)
+    return start, end, 0, True
 
 
 def _get_or_create_mock_calibration(vehicle: Vehicle) -> CalibrationTable:

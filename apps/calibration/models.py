@@ -46,15 +46,21 @@ class CalibrationTable(models.Model):
 
 
 class CalibrationPoint(models.Model):
-    """One row of a calibration grid: total litres and per-sensor raw codes."""
+    """One row of a calibration grid: sensor code and litres per tank."""
 
     table = models.ForeignKey(
         CalibrationTable,
         on_delete=models.CASCADE,
         related_name="points",
     )
-    litres = models.DecimalField(max_digits=10, decimal_places=3)
-    sensor_codes = models.JSONField()
+    litres = models.DecimalField(
+        max_digits=10,
+        decimal_places=3,
+        help_text="Sensor code from column 1 of the calibration file.",
+    )
+    sensor_codes = models.JSONField(
+        help_text="Litres per tank from columns 2..N of the calibration file.",
+    )
     row_number = models.PositiveIntegerField()
 
     class Meta:
